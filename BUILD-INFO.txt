@@ -1,0 +1,8 @@
+Signer #1 certificate DN: CN=Drift Personal Build, OU=Personal Apps
+Signer #1 certificate SHA-256 digest: 80449c61bd0ecef4560eef65a575111e1884a465fb443859bba64cbf9943d022
+Signer #1 certificate SHA-1 digest: b5b906305d778a2a94e687bf102ebf4f10592534
+Signer #1 certificate MD5 digest: 0dc0a7ead66f313d86d814a89caeca74
+
+Build 2 radio probe: Android compile/signature/launcher checks passed. Same certificate as build 1; versionCode=2.
+No TV radio or native AirDrop hardware test has run.
+APK SHA-256: 74464e3d60c7e04b1de64e198c088d4665ec3ba80ab83a6b042f7a5fa885e9ba
