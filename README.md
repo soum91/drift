@@ -1,6 +1,17 @@
-# Drift: native AirDrop investigation, build 2
+# Drift: Android TV file transfer and native AirDrop research
 
-The required outcome is the Sony A80L appearing in the iPhone's **native AirDrop picker**. Build 1 did not meet that requirement and its QR/Safari transfer path is discontinued. Build 2 launches a read-only radio diagnostic screen. **No AirDrop advertisements or transfers are implemented in build 2.**
+The long-term research goal is the Sony A80L appearing in the iPhone's **native AirDrop picker**. That is **not implemented**. iOS does not expose its Apple peer-to-peer AirDrop/Wi-Fi protocol to third-party Android apps. The previous build 2 was a read-only USB radio diagnostic. The new build 3 source adds a practical, app-to-app file receiver and preserves the read-only radio research screen.
+
+## Build 3 source (not yet signed and released)
+
+- **Ad hoc Wi-Fi**: TV creates an Android Wi-Fi Direct group; iPhone joins the displayed network in Settings. The EmberTV iPhone companion's new **Drift** tab sends any file using the six-digit code shown on the TV. No router needed. TV prompts for each file.
+- **Local Wi-Fi or Ethernet**: TV listens on the selected local interface at TCP port `45788`; same companion pairing and file transfer, without creating a direct group. HTTP is permitted only on a private trusted network; this is not an internet-facing service. Transfer code expires after 15 minutes and locks after ten bad attempts.
+- **Bluetooth LE**: separate small-file protocol using encrypted GATT writes and explicit TV approval. The TV must support BLE peripheral advertising; many Android TV devices do not. Max file size is 8 MiB. This is not classic Bluetooth OBEX or AirDrop.
+- Optional Safari fallback remains available, but is no longer the primary flow.
+- Received files stay inside Drift's private storage until opened or deleted. APKs use Android's installer permission prompt; none are silently installed.
+- The radio diagnostic remains reachable from **Radio research** in the TV app. It does not detach or initialize the Wi-Fi radio.
+
+**Signing continuity:** `dev.soum91.drift` retains its application ID and build 3 increments `versionCode` to 3. The original signing keystore is *not* in GitHub. CI compiles an explicitly `UNSIGNED` APK for review; do not attempt to install it over build 2. A real in-place upgrade must be signed using the original key and verified on hardware before its release is added to EmberTV's unified catalog. The EmberTV catalog currently links the existing signed **build 2 diagnostic**, with that limitation clearly displayed.
 
 ## Purpose
 

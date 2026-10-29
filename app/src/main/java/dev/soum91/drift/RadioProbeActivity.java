@@ -37,7 +37,7 @@ public final class RadioProbeActivity extends Activity {
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(40,24,40,24); root.setBackgroundColor(0xff101827);
         TextView title = text("DRIFT / NATIVE AIRDROP RADIO INVESTIGATION",22,0xff6fe4bd); root.addView(title);
-        TextView explanation = text("Build 2 checks access to the internal Wi-Fi radio. It does not transfer files or advertise AirDrop.\nRefresh reads device details; Test USB access asks permission and reads descriptors only.",16,0xffc3cfe0); root.addView(explanation);
+        TextView explanation = text("This research screen checks access to the internal Wi-Fi radio. No AirDrop or AWDL advertisement is implemented.\nRefresh reads device details; Test USB access asks permission and reads descriptors only.",16,0xffc3cfe0); root.addView(explanation);
         LinearLayout actions = new LinearLayout(this); root.addView(actions);
         Button refresh = button("Refresh radio details", () -> refresh()); actions.addView(refresh);
         actions.addView(button("Test USB access", () -> chooseDevice()));

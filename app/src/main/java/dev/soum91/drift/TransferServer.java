@@ -8,8 +8,9 @@ import java.security.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Small, bounded HTTP receiver. Bound only to the Wi-Fi Direct owner's address. */
+/** Small, bounded HTTP receiver, bound to the selected local network interface. */
 public final class TransferServer implements Closeable {
     public interface Events {
         boolean approve(String name, long size) throws InterruptedException;
@@ -22,6 +23,8 @@ public final class TransferServer implements Closeable {
     private final byte[] page;
     private final Events events;
     private final String token = randomToken();
+    private final String pairingCode = String.format(Locale.ROOT, "%06d", new SecureRandom().nextInt(1000000));
+    private final AtomicInteger incorrectCodes = new AtomicInteger();
     private final long expiresAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(15);
     private final AtomicBoolean busy = new AtomicBoolean();
     private final Set<Socket> sockets = ConcurrentHashMap.newKeySet();
@@ -42,6 +45,7 @@ public final class TransferServer implements Closeable {
         if (!folder.isDirectory() && !folder.mkdirs()) throw new IOException("Cannot create received folder");
     }
     public String token() { return token; }
+    public String pairingCode() { return pairingCode; }
     public int start(InetAddress address, int port) throws IOException {
         listener = new ServerSocket();
         listener.bind(new InetSocketAddress(address, port), 4);
@@ -95,6 +99,17 @@ public final class TransferServer implements Closeable {
                 respond(output, 200, "text/html; charset=utf-8", page); return;
             }
             if (!"POST".equals(request[0])) { reply(output, 404, "Not found"); return; }
+            if ("/pair".equals(uri.getPath())) {
+                String supplied = headers.getOrDefault("x-drift-code", "");
+                if (!closed && System.nanoTime() <= expiresAt && incorrectCodes.get() < 10 &&
+                    MessageDigest.isEqual(supplied.getBytes(StandardCharsets.US_ASCII), pairingCode.getBytes(StandardCharsets.US_ASCII))) {
+                    reply(output, 200, token);
+                } else {
+                    incorrectCodes.incrementAndGet();
+                    reply(output, 403, "Invalid or expired pairing code");
+                }
+                return;
+            }
             String authorization = headers.getOrDefault("authorization", "");
             if (closed || System.nanoTime() > expiresAt || !MessageDigest.isEqual(
                     authorization.getBytes(StandardCharsets.UTF_8), ("Bearer " + token).getBytes(StandardCharsets.UTF_8))) {

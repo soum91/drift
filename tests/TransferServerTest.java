@@ -17,6 +17,15 @@ public class TransferServerTest {
         InputStream in=code<400?c.getInputStream():c.getErrorStream();
         String result=in==null?"":new String(in.readAllBytes(),StandardCharsets.UTF_8);c.disconnect();return result;
     }
+    static String pair(int port,String code,int expected)throws Exception{
+        HttpURLConnection c=(HttpURLConnection)new URL("http://127.0.0.1:"+port+"/pair").openConnection();
+        c.setRequestMethod("POST");c.setRequestProperty("X-Drift-Code",code);c.setDoOutput(true);c.setFixedLengthStreamingMode(0);
+        try(OutputStream o=c.getOutputStream()){}
+        int result=c.getResponseCode();check(result==expected,"Pairing response "+result);
+        try(InputStream in=result<400?c.getInputStream():c.getErrorStream()){
+            return new String(in.readAllBytes(),StandardCharsets.UTF_8);
+        }finally{c.disconnect();}
+    }
     public static void main(String[] args)throws Exception{
         File dir=Files.createTempDirectory("drift-test").toFile();
         AtomicBoolean accept=new AtomicBoolean(true);AtomicInteger received=new AtomicInteger();AtomicInteger errors=new AtomicInteger();
@@ -28,6 +37,9 @@ public class TransferServerTest {
         });
         int port=server.start(InetAddress.getLoopbackAddress(),0);String token=server.token();byte[] empty={};
         try{
+            check(server.pairingCode().matches("[0-9]{6}"),"Pairing code is six digits");
+            check(!pair(port,"invalid",403).contains(token),"Invalid code does not reveal token");
+            check(pair(port,server.pairingCode(),200).equals(token),"Correct code returns session token");
             call(port,"/offer?name=a.txt&size=3","bad",empty,403);
             call(port,"/offer?name=..%2Fescape.apk&size=3",token,empty,400);
             call(port,"/offer?name=.hidden&size=3",token,empty,400);

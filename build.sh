@@ -2,9 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${ANDROID_HOME:?Set ANDROID_HOME to an Android SDK with platform 35 and build-tools 35.0.0}"
-: "${DRIFT_KEYSTORE:?Set DRIFT_KEYSTORE to the retained signing keystore}"
-: "${DRIFT_STOREPASS_FILE:?Set DRIFT_STOREPASS_FILE to its password file}"
-DRIFT_BUILD_NUMBER=${DRIFT_BUILD_NUMBER:-1}
+DRIFT_BUILD_NUMBER=${DRIFT_BUILD_NUMBER:-3}
 DRIFT_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 DRIFT_ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
 mkdir -p build/deps build/classes build/dex out
@@ -29,5 +27,12 @@ jar cf build/classes.jar -C build/classes .
 cp build/base.apk build/unsigned.apk
 (cd build/dex && zip -q ../unsigned.apk classes*.dex)
 "$DRIFT_TOOLS/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
-"$DRIFT_TOOLS/apksigner" sign --ks "$DRIFT_KEYSTORE" --ks-key-alias drift --ks-pass "file:$DRIFT_STOREPASS_FILE" --out "out/Drift-0.1.0-build-$DRIFT_BUILD_NUMBER.apk" build/aligned.apk
-"$DRIFT_TOOLS/apksigner" verify --verbose "out/Drift-0.1.0-build-$DRIFT_BUILD_NUMBER.apk"
+if [ "${DRIFT_UNSIGNED:-0}" = 1 ]; then
+  cp build/aligned.apk "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER-UNSIGNED.apk"
+  echo "Unsigned CI compilation only. This APK cannot update a signed Drift installation."
+else
+  : "${DRIFT_KEYSTORE:?Set DRIFT_KEYSTORE to the original retained signing keystore}"
+  : "${DRIFT_STOREPASS_FILE:?Set DRIFT_STOREPASS_FILE to its password file}"
+  "$DRIFT_TOOLS/apksigner" sign --ks "$DRIFT_KEYSTORE" --ks-key-alias drift --ks-pass "file:$DRIFT_STOREPASS_FILE" --out "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk" build/aligned.apk
+  "$DRIFT_TOOLS/apksigner" verify --verbose "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk"
+fi

@@ -7,6 +7,10 @@ import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
 import android.location.LocationManager;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.net.wifi.p2p.*;
@@ -30,11 +34,12 @@ public final class MainActivity extends Activity {
     private WifiP2pManager manager;
     private WifiP2pManager.Channel channel;
     private TransferServer server;
-    private boolean registered, starting, ownedGroup, destroyed;
+    private boolean registered, starting, ownedGroup, destroyed, lanMode;
+    private BluetoothReceiver bluetooth;
     private volatile int generation;
     private TextView state, detail, progress, networkName;
     private ImageView wifiQr, sendQr;
-    private Button start, stop;
+    private Button start, lan, bt, stop;
     private AlertDialog consent;
     private File pendingInstall;
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -42,10 +47,10 @@ public final class MainActivity extends Activity {
             if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(intent.getAction())) {
                 int value = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1);
                 record("P2P state: " + value);
-                if (value == WifiP2pManager.WIFI_P2P_STATE_DISABLED && (starting || server != null)) {
+                if (!lanMode && value == WifiP2pManager.WIFI_P2P_STATE_DISABLED && (starting || server != null)) {
                     stopSession(); message("Wi-Fi Direct unavailable", "Enable Wi-Fi, then try Start direct transfer again.");
                 }
-            } else if (starting || server != null) refreshGroup(generation, 0);
+            } else if (!lanMode && (starting || server != null)) refreshGroup(generation, 0);
         }
     };
     @Override public void onCreate(Bundle saved) {
@@ -78,20 +83,23 @@ public final class MainActivity extends Activity {
         TextView brand = label("DRIFT  /  DIRECT TRANSFER", 15, 0xff6fe4bd); left.addView(brand);
         state = label("Bring your files closer.", 30, Color.WHITE); left.addView(state);
         detail = label("Create a private link between your iPhone and TV.\nNo router, account, or IP entry.", 17, 0xffb2bfd3); left.addView(detail);
-        start = button("Start direct transfer", () -> begin()); left.addView(start);
+        start = button("Create ad hoc Wi-Fi link", () -> begin()); left.addView(start);
+        lan = button("Use existing Wi-Fi / Ethernet", () -> beginLan()); left.addView(lan);
+        bt = button("Bluetooth LE small-file receiver", () -> beginBluetooth()); left.addView(bt);
         stop = button("Stop and disconnect", () -> stopSession()); stop.setEnabled(false); left.addView(stop);
         LinearLayout tools = new LinearLayout(this);
         tools.addView(button("Received files", () -> showFiles()));
-        tools.addView(button("Diagnostics", () -> diagnostics())); left.addView(tools);
+        tools.addView(button("Diagnostics", () -> diagnostics()));
+        tools.addView(button("Radio research", () -> startActivity(new Intent(this, RadioProbeActivity.class)))); left.addView(tools);
         long build = 1;
         try { build = getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode(); } catch (PackageManager.NameNotFoundException ignored) {}
-        progress = label("Prototype 0.1.0 / build " + build + "\nKeep Drift open while receiving.", 14, 0xff8d9bb2); left.addView(progress);
+        progress = label("Drift / build " + build + "\nKeep Drift open while receiving.", 14, 0xff8d9bb2); left.addView(progress);
         LinearLayout right = new LinearLayout(this); right.setOrientation(LinearLayout.VERTICAL); right.setGravity(Gravity.CENTER);
         root.addView(right, new LinearLayout.LayoutParams(0, -1, 1));
         networkName = label("Your direct link will appear here", 16, 0xffb2bfd3); networkName.setGravity(Gravity.CENTER); right.addView(networkName);
         LinearLayout cards = new LinearLayout(this); cards.setGravity(Gravity.CENTER); right.addView(cards);
-        wifiQr = qrCard(cards, "1 / Join TV Wi-Fi"); sendQr = qrCard(cards, "2 / Send files");
-        TextView hint = label("Scan with iPhone Camera. After joining,\nscan the second code to open Safari.\nYour phone may report 'No Internet'.", 14, 0xff8d9bb2); hint.setGravity(Gravity.CENTER); right.addView(hint);
+        wifiQr = qrCard(cards, "Ad hoc network"); sendQr = qrCard(cards, "Optional web sender");
+        TextView hint = label("Use the EmberTV iPhone companion's Drift tab.\nEnter this TV's address and pairing code.\nQR/Safari is only a fallback.", 14, 0xff8d9bb2); hint.setGravity(Gravity.CENTER); right.addView(hint);
         setContentView(root); start.requestFocus();
     }
     private TextView label(String text, int size, int color) {
@@ -119,6 +127,54 @@ public final class MainActivity extends Activity {
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private void record(String text) { log.append(text).append('\n'); }
     private void message(String title, String text) { state.setText(title); detail.setText(text); }
+    private void beginLan() {
+        if (starting || server != null || bluetooth != null) return;
+        ConnectivityManager cm = (ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+        Network active = cm == null ? null : cm.getActiveNetwork();
+        LinkProperties props = active == null ? null : cm.getLinkProperties(active);
+        InetAddress address = null;
+        if (props != null) for (LinkAddress candidate : props.getLinkAddresses()) {
+            if (candidate.getAddress() instanceof Inet4Address && !candidate.getAddress().isLoopbackAddress()
+                    && !candidate.getAddress().isLinkLocalAddress()) { address = candidate.getAddress(); break; }
+        }
+        if (address == null) {
+            message("No usable local IPv4 address", "Connect the TV to your Wi-Fi or Ethernet network, or use Create ad hoc Wi-Fi link."); return;
+        }
+        lanMode = true; starting = true; start.setEnabled(false); lan.setEnabled(false); bt.setEnabled(false); stop.setEnabled(true);
+        startReceiver(++generation, null, address);
+    }
+    private void beginBluetooth() {
+        if (starting || server != null || bluetooth != null) return;
+        if (Build.VERSION.SDK_INT >= 31 && (checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)) {
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT}, 20); return;
+        }
+        int run = ++generation;
+        try {
+            bluetooth = new BluetoothReceiver(this, receivedFolder(), new BluetoothReceiver.Events() {
+                @Override public boolean approve(String name, long size) throws InterruptedException { return askConsent(run,name,size); }
+                @Override public void progress(String name, long done, long total) {
+                    runOnUiThread(() -> { if(run == generation) progress.setText(name + "\n" + formatSize(done) + " / " + formatSize(total)); });
+                }
+                @Override public void received(File file, String sha) {
+                    runOnUiThread(() -> { if(run == generation) {
+                        progress.setText("Received " + file.getName() + "\nSHA-256: " + sha.substring(0,16) + "…");
+                        new AlertDialog.Builder(MainActivity.this).setTitle("Bluetooth file received").setMessage(file.getName())
+                            .setPositiveButton("Open", (d,w) -> openFile(file)).setNegativeButton("Done",null).show();
+                    }});
+                }
+                @Override public void error(String why) { runOnUiThread(() -> { if(run == generation) progress.setText(why); }); }
+            });
+            bluetooth.start();
+            start.setEnabled(false); lan.setEnabled(false); bt.setEnabled(false); stop.setEnabled(true);
+            message("Bluetooth receiver active", "Choose Bluetooth in the EmberTV companion's Drift tab.\nFor small files only; larger files should use Wi-Fi.");
+            networkName.setText("DRIFT Bluetooth LE\nTV approval is required for each file");
+            progress.setText("Encrypted BLE characteristic writes.\n8 MiB maximum per file.");
+        } catch (Exception e) {
+            if (bluetooth != null) { bluetooth.close(); bluetooth = null; }
+            message("Bluetooth is unavailable", e.getMessage() == null ? e.toString() : e.getMessage());
+        }
+    }
     private void begin() {
         if (starting || server != null) return;
         if (manager == null || channel == null || !getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)) {
@@ -135,7 +191,7 @@ public final class MainActivity extends Activity {
             new AlertDialog.Builder(this).setTitle("Enable Location for Wi-Fi Direct").setMessage("Android 12 requires the Location switch for Wi-Fi Direct. Drift does not collect your location.")
                 .setPositiveButton("Location settings", (d,w) -> startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))).setNegativeButton("Cancel",null).show(); return;
         }
-        starting = true; start.setEnabled(false); stop.setEnabled(true); int run = ++generation;
+        starting = true; lanMode = false; start.setEnabled(false); lan.setEnabled(false); bt.setEnabled(false); stop.setEnabled(true); int run = ++generation;
         message("Checking direct Wi-Fi…", "Checking for an existing group before creating a new one.");
         try { manager.requestGroupInfo(channel, group -> {
             if (run != generation) return;
@@ -199,9 +255,11 @@ public final class MainActivity extends Activity {
     private void startReceiver(int run, WifiP2pGroup group, InetAddress address) {
         if (run != generation || server != null) return;
         try {
-            NetworkInterface iface = NetworkInterface.getByName(group.getInterface());
-            if (iface == null || !Collections.list(iface.getInetAddresses()).contains(address))
-                throw new IOException("Group owner address is not assigned to the P2P interface");
+            if (group != null) {
+                NetworkInterface iface = NetworkInterface.getByName(group.getInterface());
+                if (iface == null || !Collections.list(iface.getInetAddresses()).contains(address))
+                    throw new IOException("Group owner address is not assigned to the P2P interface");
+            }
             byte[] page;
             try (InputStream in = getAssets().open("send.html"); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[4096]; int n; while ((n = in.read(buffer)) != -1) out.write(buffer,0,n); page = out.toByteArray();
@@ -221,15 +279,18 @@ public final class MainActivity extends Activity {
                 }
                 public void error(String message) { runOnUiThread(() -> { if (run == generation) { record(message); progress.setText(message); } }); }
             });
-            int port = server.start(address, 0);
+            int port = server.start(address, 45788);
             String url = "http://" + address.getHostAddress() + ":" + port + "/#token=" + server.token();
-            wifiQr.setImageBitmap(qr("WIFI:T:WPA;S:" + escapeWifi(group.getNetworkName()) + ";P:" + escapeWifi(group.getPassphrase()) + ";;"));
+            if (group != null) wifiQr.setImageBitmap(qr("WIFI:T:WPA;S:" + escapeWifi(group.getNetworkName()) + ";P:" + escapeWifi(group.getPassphrase()) + ";;"));
+            else wifiQr.setImageDrawable(null);
             sendQr.setImageBitmap(qr(url));
-            networkName.setText(group.getNetworkName() + "\nPassword: " + group.getPassphrase());
+            networkName.setText((group == null ? "Local network" : group.getNetworkName() + "\nWi-Fi password: " + group.getPassphrase()) +
+                "\nTV IP: " + address.getHostAddress() + "\nPort: " + port + "\nCompanion code: " + server.pairingCode());
             starting = false;
-            message("Ready for your iPhone.", "Scan 1 to join the TV's Wi-Fi.\nScan 2 to choose files in Safari.\nAccept each file with your remote.");
-            progress.setText("Pairing valid for 15 minutes.\nWPA2-protected direct Wi-Fi / HTTP transfer.");
-            record("Group owner ready; interface=" + group.getInterface() + "; bound to P2P address only");
+            message("Ready for your iPhone.", (group == null ? "Keep iPhone and TV on the same private network." :
+                "Join the TV's ad hoc Wi-Fi in iPhone Settings.") + "\nThen use the EmberTV companion's Drift tab.\nAccept each incoming file on TV.");
+            progress.setText("Pairing valid for 15 minutes.\nLocal HTTP: use only on trusted networks.");
+            record("Receiver ready; interface=" + (group == null ? "LAN" : group.getInterface()) + "; IP=" + address.getHostAddress());
             main.postDelayed(() -> {
                 if (run == generation && server != null) message("Pairing window expired", "An active upload can finish. For another file, choose Stop, then Start to generate new codes.");
             },15*60*1000L);
@@ -261,14 +322,15 @@ public final class MainActivity extends Activity {
         generation++; starting = false;
         if (consent != null) consent.dismiss();
         if (server != null) { server.close(); server = null; }
+        if (bluetooth != null) { bluetooth.close(); bluetooth = null; }
         if (ownedGroup && manager != null && channel != null) {
             try { manager.removeGroup(channel, new WifiP2pManager.ActionListener() {
                 public void onSuccess() { record("Owned group removed"); }
                 public void onFailure(int reason) { record("Group removal result: " + reason); }
             }); } catch (RuntimeException e) { record("Remove group: " + e.getClass().getSimpleName()); }
         }
-        ownedGroup = false;
-        start.setEnabled(true); stop.setEnabled(false); wifiQr.setImageDrawable(null); sendQr.setImageDrawable(null);
+        ownedGroup = false; lanMode = false;
+        start.setEnabled(true); lan.setEnabled(true); bt.setEnabled(true); stop.setEnabled(false); wifiQr.setImageDrawable(null); sendQr.setImageDrawable(null);
         networkName.setText("No active direct link"); message("Ready when you are.", "Start a direct session to generate fresh pairing codes.");
         progress.setText("Session stopped. Received files are kept.");
     }
@@ -307,6 +369,8 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results) {
         super.onRequestPermissionsResult(request,permissions,results);
         if(request==10 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED)begin();
+        else if(request==20 && results.length>=2 && results[0]==PackageManager.PERMISSION_GRANTED && results[1]==PackageManager.PERMISSION_GRANTED)beginBluetooth();
+        else if(request==20) message("Bluetooth permissions needed", "Allow Nearby devices for BLE transfers, or use Wi-Fi.");
         else message("Wi-Fi permission needed", "Grant the permission to start a direct session. No connection has been created.");
     }
     @Override protected void onDestroy() {

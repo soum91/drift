@@ -17,3 +17,23 @@ jobs:
           java-version: '17'
       - name: Test transfer receiver
         run: bash test.sh
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install required Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Compile Android sources (no replacement signing key)
+        env:
+          DRIFT_UNSIGNED: '1'
+          DRIFT_BUILD_NUMBER: '3'
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Drift-compiled-unsigned-build-3
+          path: out/Drift-0.1.1-build-3-UNSIGNED.apk
