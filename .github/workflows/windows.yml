@@ -48,6 +48,9 @@ jobs:
           - Queue files for pickup in Drift iPhone Companion.
           - Opt-in two-way clipboard syncing with the Drift iPhone app while foregrounded.
           - Six-digit pairing, bounded transfer sizes and manual incoming file approval.
+          - Bonjour Wi-Fi auto-discovery and trusted-device reconnect after first pairing.
+          - Automatically start receiving, optional launch at Windows login, and trusted-device revoke.
+          - Windows Bluetooth LE receiver with encrypted GATT, per-file approval and 8 MiB limit (radio dependent).
           - Optional link to PulseIt native AirDrop research (external app and supported adapter required).
 
           Note: This executable is not code-signed and has not yet been tested on user hardware.

@@ -23,6 +23,8 @@ The `.github/workflows/companion.yml` workflow builds an **unsigned** `Drift-Com
 
 `windows/` contains a **separate native Windows x64 app** with its own GitHub Actions release. It sends to the existing TV protocol and receives files from iPhone with per-file acceptance. It can share files for iPhone download and optionally sync text clipboards in both directions while the iPhone app is foregrounded. Clipboard sharing and clipboard receiving on the Windows side are OFF by default. See [Windows setup, limitations, and changelog](windows/README.md).
 
+The Windows update adds Bonjour discovery, iPhone trusted pairing/reconnect, automatic Wi-Fi receive, Windows login autostart and a native BLE GATT receiver for small-file transfers on compatible PC radios. Remembered pairing works when the iPhone Drift app is active; unrestricted iOS background clipboard syncing is not possible.
+
 Windows builds: https://github.com/soum91/drift/releases?q=windows-v
 
 Native AirDrop remains an optional, **hardware-specific research** integration: [PulseIt](https://github.com/gsl0001/windows-airdrop) has documented actual iPhone-to-Windows AirDrop transfers using a supported TP-Link Archer T3U `2357:012d` USB adapter. Drift does not bundle PulseIt or claim that Windows Wi-Fi Direct can implement Apple's AWDL. Android TV's native AirDrop picker goal also remains unimplemented.

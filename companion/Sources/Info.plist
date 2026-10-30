@@ -13,6 +13,7 @@
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>Drift connects to nearby Android TV and Windows computers to transfer files and optional clipboard text.</string>
+    <key>NSBonjourServices</key><array><string>_drift._tcp</string></array>
     <key>NSBluetoothAlwaysUsageDescription</key><string>Drift discovers your Android TV and sends small files over Bluetooth Low Energy.</string>
     <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
     <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>

@@ -1,6 +1,8 @@
 import Foundation
 import CoreBluetooth
 import UIKit
+import Security
+import CryptoKit
 
 struct DriftPeer: Identifiable {
     let id: UUID
@@ -15,7 +17,8 @@ struct DriftInboxFile: Identifiable, Decodable {
 
 /// Optional Drift receiver integration. Wi-Fi is preferred for large files;
 /// BLE is an encrypted GATT small-file fallback, only when the TV can advertise.
-@MainActor final class DriftModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+@MainActor final class DriftModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate,
+    NetServiceBrowserDelegate, NetServiceDelegate {
     @Published var address = UserDefaults.standard.string(forKey: "driftAddress") ?? ""
     @Published var code = ""
     @Published var status = "Open Drift on TV or Windows, then pair over Wi-Fi."
@@ -26,6 +29,9 @@ struct DriftInboxFile: Identifiable, Decodable {
     @Published var inboxFiles: [DriftInboxFile] = []
     @Published var downloadedFiles: [URL] = []
     @Published var clipboardSyncEnabled = false
+    @Published var autoReconnect = UserDefaults.standard.object(forKey: "driftAutoReconnect") as? Bool ?? true
+    @Published var foundWindows = "Searching for Drift on your network…"
+    @Published var reconnecting = false
     var isWiFiPaired: Bool { !token.isEmpty }
     private var seenPhoneClipboard: String?
     private var seenWindowsClipboard: String?
@@ -44,10 +50,21 @@ struct DriftInboxFile: Identifiable, Decodable {
     private var bluetoothOffset = 0
     private var awaitingApproval = false
     private var token = ""
+    private var serviceBrowser: NetServiceBrowser?
+    private var discoveredServices: [NetService] = []
+
+    private struct Trust: Codable {
+        let id: String
+        let secret: String
+        var host: String
+    }
+    private let trustAccount = "dev.soum91.drift.windows.trusted"
 
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: .main)
+        beginDiscovery()
+        Task { await reconnectWindowsIfPossible() }
     }
 
     private var endpoint: URL? {
@@ -71,12 +88,124 @@ struct DriftInboxFile: Identifiable, Decodable {
                 throw DriftError.response("Invalid pairing response")
             }
             token = result
+            if let http = response as? HTTPURLResponse,
+               let id = http.value(forHTTPHeaderField: "X-Drift-Device-ID"),
+               let secret = http.value(forHTTPHeaderField: "X-Drift-Trust-Key"),
+               id.count == 32, secret.count == 64 {
+                saveTrust(Trust(id: id, secret: secret, host: address))
+                status = "Trusted Windows pairing saved. Reconnection will be automatic."
+            }
             inboxFiles = []
             seenPhoneClipboard = nil
             seenWindowsClipboard = nil
             UserDefaults.standard.set(address, forKey: "driftAddress")
             status = "Paired for this Drift session. You can send files, or sync clipboard with Windows."
         } catch { status = "Drift pairing failed: \(error.localizedDescription)" }
+    }
+
+    func beginDiscovery() {
+        serviceBrowser?.stop()
+        let browser = NetServiceBrowser()
+        browser.delegate = self
+        serviceBrowser = browser
+        browser.searchForServices(ofType: "_drift._tcp.", inDomain: "local.")
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        discoveredServices.append(service) // Keep a strong reference until resolved.
+        service.delegate = self
+        service.resolve(withTimeout: 8)
+        foundWindows = "Found \(service.name). Resolving…"
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        discoveredServices.removeAll { $0 === service }
+    }
+
+    func netServiceDidResolveAddress(_ service: NetService) {
+        guard let hostname = service.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
+              !hostname.isEmpty else { return }
+        foundWindows = "Found \(service.name) at \(hostname)"
+        guard autoReconnect, let trust = loadTrust(),
+              let txt = service.txtRecordData(),
+              let id = NetService.dictionary(fromTXTRecord: txt)["id"].flatMap({ String(data: $0, encoding: .utf8) }),
+              id == trust.id else { return }
+        if address != hostname {
+            address = hostname
+            UserDefaults.standard.set(hostname, forKey: "driftAddress")
+            saveTrust(Trust(id: trust.id, secret: trust.secret, host: hostname))
+        }
+        Task { await reconnectWindowsIfPossible() }
+    }
+
+    func setAutoReconnect(_ enabled: Bool) {
+        autoReconnect = enabled
+        UserDefaults.standard.set(enabled, forKey: "driftAutoReconnect")
+        if enabled { Task { await reconnectWindowsIfPossible() } }
+    }
+
+    func reconnectWindowsIfPossible() async {
+        guard autoReconnect, !reconnecting, let trust = loadTrust(), let base = endpoint else { return }
+        reconnecting = true
+        defer { reconnecting = false }
+        do {
+            if !token.isEmpty {
+                var health = URLRequest(url: base.appendingPathComponent("health"))
+                health.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                let (_, healthResponse) = try await URLSession.shared.data(for: health)
+                if let http = healthResponse as? HTTPURLResponse, http.statusCode == 200 { return }
+            }
+            // A one-time challenge proves device trust; the secret is never resent after initial pairing.
+            let (nonceData, challengeResponse) = try await URLSession.shared.data(from: base.appendingPathComponent("challenge"))
+            guard let http = challengeResponse as? HTTPURLResponse, http.statusCode == 200,
+                  http.value(forHTTPHeaderField: "X-Drift-Device-ID") == trust.id,
+                  let nonce = String(data: nonceData, encoding: .utf8), nonce.count == 48,
+                  let secret = Data(hexadecimal: trust.secret) else { return }
+            let signature = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: secret))
+            let proof = Data(signature).map { String(format: "%02X", $0) }.joined()
+            var request = URLRequest(url: base.appendingPathComponent("reconnect"))
+            request.httpMethod = "POST"
+            request.setValue(proof, forHTTPHeaderField: "X-Drift-Proof")
+            let (result, response) = try await URLSession.shared.data(for: request)
+            try validate(response, result)
+            guard let session = String(data: result, encoding: .utf8), session.count == 48 else { return }
+            token = session
+            status = "Connected automatically to Drift Windows (\(address))."
+        } catch {
+            // Bonjour may discover the PC moments later, or the PC may be sleeping.
+            if !token.isEmpty { token = "" }
+            status = "Waiting for Drift Windows… \(error.localizedDescription)"
+        }
+    }
+
+    private func loadTrust() -> Trust? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrAccount as String: trustAccount,
+                                    kSecReturnData as String: true,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return try? JSONDecoder().decode(Trust.self, from: data)
+    }
+
+    private func saveTrust(_ trust: Trust) {
+        guard let value = try? JSONEncoder().encode(trust) else { return }
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrAccount as String: trustAccount]
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = value
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    func forgetTrustedWindows() {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrAccount as String: trustAccount]
+        SecItemDelete(query as CFDictionary)
+        token = ""
+        status = "Windows trust removed. Enter the new pairing code to connect."
     }
 
     func sendWiFi(_ url: URL) async {
@@ -244,7 +373,7 @@ struct DriftInboxFile: Identifiable, Decodable {
         guard central.state == .poweredOn else { status = "Enable Bluetooth and allow access to nearby devices"; return }
         peers = []; discovered = [:]
         central.scanForPeripherals(withServices: [service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        status = "Looking for a TV running Drift's Bluetooth receiver…"
+        status = "Looking for a Windows PC or TV with Drift Bluetooth receiving enabled…"
     }
     func connectBluetooth(_ id: UUID) {
         guard let device = discovered[id] else { status = "Scan again to find Drift"; return }
@@ -268,11 +397,11 @@ struct DriftInboxFile: Identifiable, Decodable {
                 throw DriftError.response("Filename too long for Bluetooth packet")
             }
             guard dataCharacteristic.properties.contains(.write), control.properties.contains(.write) else {
-                throw DriftError.response("TV's Bluetooth characteristics cannot receive files")
+                throw DriftError.response("Bluetooth receiver does not expose writable Drift characteristics")
             }
             bluetoothData = bytes; bluetoothOffset = 0; awaitingApproval = true
             busy = true; progress = 0
-            status = "Accept \(url.lastPathComponent) on TV to start Bluetooth transfer"
+            status = "Accept \(url.lastPathComponent) on the receiving device to start Bluetooth transfer"
             device.writeValue(command, for: control, type: .withResponse)
         } catch { status = error.localizedDescription; busy = false }
     }
@@ -286,7 +415,7 @@ struct DriftInboxFile: Identifiable, Decodable {
             progress = Double(bluetoothOffset) / Double(max(bluetoothData.count,1))
             device.writeValue(packet, for: dataCharacteristic, type: .withResponse)
         } else {
-            status = "Verifying saved Bluetooth file on TV…"
+            status = "Verifying saved Bluetooth file on receiver…"
             device.writeValue(Data("FINISH".utf8), for: control, type: .withResponse)
         }
     }
@@ -298,10 +427,10 @@ struct DriftInboxFile: Identifiable, Decodable {
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard discovered[device.identifier] == nil else { return }
         discovered[device.identifier] = device
-        peers.append(DriftPeer(id: device.identifier, name: device.name ?? "Drift TV (\(RSSI) dBm)"))
+        peers.append(DriftPeer(id: device.identifier, name: device.name ?? "Drift receiver (\(RSSI) dBm)"))
     }
     func centralManager(_ central: CBCentralManager, didConnect device: CBPeripheral) {
-        connectedName = device.name ?? "Drift TV"
+        connectedName = device.name ?? "Drift receiver"
         status = "Connected. Discovering encrypted file-transfer service…"
         device.discoverServices([service])
     }
@@ -331,9 +460,21 @@ struct DriftInboxFile: Identifiable, Decodable {
     func peripheral(_ device: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == statusUUID, let text = characteristic.value.flatMap({ String(data: $0, encoding: .utf8) }) else { return }
         if text == "READY" && awaitingApproval { awaitingApproval = false; nextBluetoothPacket() }
-        else if text.hasPrefix("DONE:") { progress = 1; busy = false; bluetoothData = Data(); status = "Bluetooth transfer complete. SHA-256: \(text.dropFirst(5))" }
+        else if text.hasPrefix("DONE:") {
+            let remoteHash = String(text.dropFirst(5)).lowercased()
+            let localHash = SHA256.hash(data: bluetoothData).map { String(format: "%02x", $0) }.joined()
+            progress = 1; busy = false; bluetoothData = Data()
+            if remoteHash.count == 64 {
+                status = remoteHash == localHash
+                    ? "Bluetooth transfer complete and SHA-256 verified."
+                    : "WARNING: Bluetooth file checksum does not match. Retry over Wi-Fi."
+            } else {
+                // GATT notifications can be restricted to 20 bytes on older radios.
+                status = "Receiver confirmed Bluetooth transfer. SHA-256 notification was shortened by the radio."
+            }
+        }
         else if text == "DECLINED" || text == "CANCELLED" || text.hasPrefix("ERROR:") {
-            busy = false; awaitingApproval = false; bluetoothData = Data(); status = "TV: \(text)"
+            busy = false; awaitingApproval = false; bluetoothData = Data(); status = "Receiver: \(text)"
         }
     }
     func peripheral(_ device: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -345,4 +486,18 @@ struct DriftInboxFile: Identifiable, Decodable {
 private enum DriftError: LocalizedError {
     case response(String)
     var errorDescription: String? { if case .response(let text) = self { return text }; return nil }
+}
+
+private extension Data {
+    init?(hexadecimal: String) {
+        guard hexadecimal.count.isMultiple(of: 2) else { return nil }
+        self.init(capacity: hexadecimal.count / 2)
+        var cursor = hexadecimal.startIndex
+        while cursor < hexadecimal.endIndex {
+            let next = hexadecimal.index(cursor, offsetBy: 2)
+            guard let byte = UInt8(hexadecimal[cursor..<next], radix: 16) else { return nil }
+            append(byte)
+            cursor = next
+        }
+    }
 }

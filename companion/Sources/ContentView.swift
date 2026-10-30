@@ -40,6 +40,10 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
 
                     if method == .wifi {
+                        Toggle("Automatically reconnect to Windows", isOn: Binding(
+                            get: { model.autoReconnect },
+                            set: { model.setAutoReconnect($0) }))
+                        Text(model.foundWindows).font(.footnote).foregroundStyle(.secondary)
                         TextField("TV or Windows IPv4 address", text: $model.address)
                             .keyboardType(.numbersAndPunctuation).textInputAutocapitalization(.never)
                             .autocorrectionDisabled().focused($editingAddress)
@@ -51,6 +55,15 @@ struct ContentView: View {
                         } label: {
                             Label("Pair with Drift receiver", systemImage: "link")
                         }.disabled(model.busy)
+                        Button {
+                            model.beginDiscovery()
+                            Task { await model.reconnectWindowsIfPossible() }
+                        } label: {
+                            Label("Find and reconnect to Windows", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        Button(role: .destructive) { model.forgetTrustedWindows() } label: {
+                            Label("Forget Windows pairing", systemImage: "person.crop.circle.badge.xmark")
+                        }
                     } else {
                         Button { model.scanBluetooth() } label: {
                             Label("Find nearby Drift receivers", systemImage: "dot.radiowaves.left.and.right")
@@ -130,13 +143,13 @@ struct ContentView: View {
 
                 Section("How to connect") {
                     if method == .wifi {
-                        Label("Open Drift on your Android TV or Windows PC. Start receiving.", systemImage: "1.circle")
+                        Label("Open Drift on your Android TV or Windows PC. Windows now starts receiving automatically.", systemImage: "1.circle")
                         Label("Join the receiver's Wi-Fi network, or connect both devices to the same router.", systemImage: "2.circle")
                         Label("Enter the receiver's IPv4 address and code. Windows can exchange files and clipboard text.", systemImage: "3.circle")
                     } else {
-                        Label("On TV, start Drift's Bluetooth LE receiver.", systemImage: "1.circle")
-                        Label("Find your TV above and connect. Approve Bluetooth pairing if requested.", systemImage: "2.circle")
-                        Label("Choose a small file and accept it using the TV remote.", systemImage: "3.circle")
+                        Label("On Windows, enable Drift Bluetooth LE receiver. Or on TV, start the BLE receiver.", systemImage: "1.circle")
+                        Label("Find the nearby Drift device and connect. Approve system Bluetooth pairing if prompted.", systemImage: "2.circle")
+                        Label("Choose a file up to 8 MiB and accept it on the receiver.", systemImage: "3.circle")
                     }
                 }
 
@@ -162,6 +175,12 @@ struct ContentView: View {
             while model.clipboardSyncEnabled && scenePhase == .active && !Task.isCancelled {
                 await model.syncClipboardOnce()
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+        .task(id: model.autoReconnect && scenePhase == .active) {
+            while model.autoReconnect && scenePhase == .active && !Task.isCancelled {
+                await model.reconnectWindowsIfPossible()
+                try? await Task.sleep(for: .seconds(15))
             }
         }
     }

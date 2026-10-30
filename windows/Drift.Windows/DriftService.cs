@@ -1,11 +1,17 @@
 using System.Net;
+using System.Collections.Concurrent;
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Makaretu.Dns;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
+using Windows.Devices.Bluetooth;
+using Windows.Devices.Bluetooth.GenericAttributeProfile;
+using Windows.Storage.Streams;
 
 namespace Drift.Windows;
 
@@ -27,27 +33,42 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, string> _offeredFiles = new();
     private readonly SemaphoreSlim _offerGate = new(1, 1);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _sessions = new();
+    private TrustData _trust = LoadOrCreateTrust();
+    private ServiceDiscovery? _discovery;
     private WebApplication? _app;
-    private string _token = "";
     private string _code = "";
     private DateTimeOffset _expiry;
     private int _failures;
+    private string? _challenge;
+    private DateTimeOffset _challengeExpiry;
+    private int _challengeFailures;
     private Ticket? _ticket;
+
+    private sealed record TrustData(string Id, string Secret);
 
     private sealed record Ticket(string Id, string Name, long Size, DateTimeOffset Expiry);
     public bool Running => _app is not null;
     public string PairingCode => _code;
+    public bool RememberPairedDevices { get; set; } = true;
+    public string DeviceId => _trust.Id;
+
+    public static IEnumerable<(IPAddress Address, string Name)> LocalInterfaces() =>
+        NetworkInterface.GetAllNetworkInterfaces()
+            .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+            .SelectMany(n => n.GetIPProperties().UnicastAddresses.Select(a => new { a.Address, Network = n }))
+            .Where(x => x.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && IsPrivateIpv4(x.Address))
+            .OrderByDescending(x => (x.Network.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ? 100 :
+                                      x.Network.NetworkInterfaceType == NetworkInterfaceType.Ethernet ? 70 : 0) +
+                                    (x.Network.GetIPProperties().GatewayAddresses.Any(g => g.Address.AddressFamily ==
+                                        System.Net.Sockets.AddressFamily.InterNetwork) ? 40 : 0) -
+                                    (new[] { "virtual", "vethernet", "hyper-v", "wsl", "vmware", "bluetooth", "loopback" }
+                                        .Any(s => (x.Network.Name + " " + x.Network.Description).Contains(s, StringComparison.OrdinalIgnoreCase)) ? 200 : 0))
+            .Select(x => (x.Address, x.Network.Name));
 
     public static IEnumerable<IPAddress> LocalAddresses()
     {
-        return System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
-            .Where(n => n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
-                        n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
-            .SelectMany(n => n.GetIPProperties().UnicastAddresses)
-            .Select(a => a.Address)
-            .Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
-                        !IPAddress.IsLoopback(a) && IsPrivateIpv4(a))
-            .Distinct();
+        return LocalInterfaces().Select(x => x.Address).Distinct();
     }
 
     public static bool IsPrivateIpv4(IPAddress address)
@@ -62,7 +83,7 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
         if (_app is not null) throw new InvalidOperationException("Drift is already listening");
         if (!IsPrivateIpv4(bindAddress)) throw new InvalidOperationException("Choose a private LAN address");
         _code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6");
-        _token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        _sessions.Clear();
         _expiry = DateTimeOffset.UtcNow.AddMinutes(15);
         _failures = 0;
         lock (_gate) _ticket = null;
@@ -77,6 +98,9 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
         });
         var app = builder.Build();
         app.MapPost("/pair", PairAsync);
+        app.MapGet("/health", HealthAsync);
+        app.MapGet("/challenge", ChallengeAsync);
+        app.MapPost("/reconnect", ReconnectAsync);
         app.MapPost("/offer", OfferAsync);
         app.MapPost("/upload", UploadAsync);
         app.MapPost("/clipboard", PushClipboardAsync);
@@ -85,6 +109,17 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
         app.MapGet("/download", DownloadAsync);
         await app.StartAsync();
         _app = app;
+        try
+        {
+            var discovery = new ServiceDiscovery();
+            var profile = new ServiceProfile("Drift-" + Environment.MachineName.Replace(' ', '-'),
+                                             "_drift._tcp", Port, [bindAddress]);
+            profile.AddProperty("id", _trust.Id);
+            discovery.Advertise(profile);
+            _discovery = discovery;
+            ui.Report("Bonjour discovery active: " + profile.FullyQualifiedName);
+        }
+        catch (Exception error) { ui.Report("Bonjour unavailable: " + error.Message + " (manual IP still works)"); }
         ui.Report($"Listening on {bindAddress}:{Port}, code {_code} (15 minutes)");
     }
 
@@ -92,7 +127,9 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     {
         var app = _app;
         _app = null;
-        _token = "";
+        _sessions.Clear();
+        _discovery?.Dispose();
+        _discovery = null;
         lock (_gate) _ticket = null;
         if (app is not null)
         {
@@ -121,10 +158,61 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     private bool Authorized(HttpContext context)
     {
         var header = context.Request.Headers.Authorization.ToString();
-        byte[] incoming = Encoding.ASCII.GetBytes(header);
-        byte[] expected = Encoding.ASCII.GetBytes("Bearer " + _token);
-        return _app is not null && DateTimeOffset.UtcNow <= _expiry &&
-               incoming.Length == expected.Length && CryptographicOperations.FixedTimeEquals(incoming, expected);
+        if (_app is null || !header.StartsWith("Bearer ", StringComparison.Ordinal)) return false;
+        var bearer = header[7..];
+        if (bearer.Length != 48 || !_sessions.TryGetValue(bearer, out var expiry) || DateTimeOffset.UtcNow > expiry) return false;
+        _sessions[bearer] = DateTimeOffset.UtcNow.AddMinutes(30); // Sliding short-lived session.
+        return true;
+    }
+
+    private string NewSession()
+    {
+        var bearer = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        _sessions[bearer] = DateTimeOffset.UtcNow.AddMinutes(30);
+        return bearer;
+    }
+
+    private Task HealthAsync(HttpContext context)
+    {
+        if (!Authorized(context)) context.Response.StatusCode = 403;
+        else context.Response.Headers["X-Drift-Device-ID"] = _trust.Id;
+        return Task.CompletedTask;
+    }
+
+    private async Task ChallengeAsync(HttpContext context)
+    {
+        if (!RememberPairedDevices) { context.Response.StatusCode = 404; return; }
+        string challenge;
+        lock (_gate)
+        {
+            challenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+            _challenge = challenge;
+            _challengeExpiry = DateTimeOffset.UtcNow.AddMinutes(1);
+            _challengeFailures = 0;
+        }
+        context.Response.Headers["X-Drift-Device-ID"] = _trust.Id;
+        context.Response.Headers.CacheControl = "no-store";
+        await context.Response.WriteAsync(challenge);
+    }
+
+    private async Task ReconnectAsync(HttpContext context)
+    {
+        if (!RememberPairedDevices) { context.Response.StatusCode = 403; return; }
+        var proof = context.Request.Headers["X-Drift-Proof"].ToString();
+        bool valid;
+        lock (_gate)
+        {
+            var expected = _challenge is null ? "" : Convert.ToHexString(HMACSHA256.HashData(
+                Convert.FromHexString(_trust.Secret), Encoding.UTF8.GetBytes(_challenge)));
+            valid = _challenge is not null && DateTimeOffset.UtcNow <= _challengeExpiry &&
+                proof.Length == expected.Length && CryptographicOperations.FixedTimeEquals(
+                    Encoding.ASCII.GetBytes(proof), Encoding.ASCII.GetBytes(expected));
+            if (valid || ++_challengeFailures > 10) _challenge = null;
+        }
+        if (!valid) { context.Response.StatusCode = 403; return; }
+        context.Response.Headers.CacheControl = "no-store";
+        await context.Response.WriteAsync(NewSession());
+        ui.Report("Trusted iPhone automatically reconnected");
     }
 
     private async Task PairAsync(HttpContext context)
@@ -145,8 +233,45 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
         }
         context.Response.ContentType = "text/plain; charset=utf-8";
         context.Response.Headers.CacheControl = "no-store";
-        await context.Response.WriteAsync(_token);
+        if (RememberPairedDevices)
+        {
+            context.Response.Headers["X-Drift-Trust-Key"] = _trust.Secret;
+            context.Response.Headers["X-Drift-Device-ID"] = _trust.Id;
+        }
+        await context.Response.WriteAsync(NewSession());
         ui.Report("iPhone or another Drift companion paired");
+    }
+
+    public void RevokeTrustedDevices()
+    {
+        _trust = SaveNewTrust();
+        _sessions.Clear();
+        lock (_gate) _challenge = null;
+        ui.Report("Previously trusted devices revoked. Restart receiving and pair again.");
+    }
+
+    private static string TrustPath => Path.Combine(Environment.GetFolderPath(
+        Environment.SpecialFolder.LocalApplicationData), "Drift", "trusted-device.dat");
+
+    private static TrustData SaveNewTrust()
+    {
+        var data = new TrustData(Guid.NewGuid().ToString("N"), Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
+        Directory.CreateDirectory(Path.GetDirectoryName(TrustPath)!);
+        File.WriteAllBytes(TrustPath, ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(data),
+                                                        null, DataProtectionScope.CurrentUser));
+        return data;
+    }
+
+    private static TrustData LoadOrCreateTrust()
+    {
+        try
+        {
+            var decoded = ProtectedData.Unprotect(File.ReadAllBytes(TrustPath), null, DataProtectionScope.CurrentUser);
+            var data = JsonSerializer.Deserialize<TrustData>(decoded);
+            if (data is not null && data.Id.Length == 32 && data.Secret.Length == 64) return data;
+        }
+        catch (Exception) { /* First launch, or the current Windows account changed. */ }
+        return SaveNewTrust();
     }
 
     private async Task OfferAsync(HttpContext context)
@@ -324,4 +449,302 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     }
 
     public async ValueTask DisposeAsync() { await StopAsync(); _offerGate.Dispose(); }
+}
+
+/// <summary>
+/// Native Windows BLE peripheral receiver. Uses the same encrypted GATT protocol and
+/// UUIDs as the Android TV Drift receiver; requires Windows Bluetooth radio support
+/// for peripheral advertising. Incoming files still require local user approval.
+/// </summary>
+internal sealed class DriftBluetoothReceiver(IDriftUi ui)
+{
+    private static readonly Guid ServiceUuid = Guid.Parse("d25e69c1-7c6d-46e3-a7c9-a7cfe89a0020");
+    private static readonly Guid ControlUuid = Guid.Parse("d25e69c1-7c6d-46e3-a7c9-a7cfe89a0021");
+    private static readonly Guid DataUuid = Guid.Parse("d25e69c1-7c6d-46e3-a7c9-a7cfe89a0022");
+    private static readonly Guid StatusUuid = Guid.Parse("d25e69c1-7c6d-46e3-a7c9-a7cfe89a0023");
+    private const long MaxBleBytes = 8L * 1024 * 1024;
+    private readonly object _lock = new();
+    private GattServiceProvider? _provider;
+    private GattLocalCharacteristic? _control;
+    private GattLocalCharacteristic? _data;
+    private GattLocalCharacteristic? _status;
+    private FileStream? _stream;
+    private IncrementalHash? _hash;
+    private string? _tempPath;
+    private string? _name;
+    private long _expected;
+    private long _received;
+    private bool _approving;
+    private bool _active;
+    private string _lastStatus = "WAITING";
+    public bool Running => _active;
+
+    public async Task StartAsync()
+    {
+        if (_active) return;
+        var result = await GattServiceProvider.CreateAsync(ServiceUuid);
+        if (result.Error != BluetoothError.Success || result.ServiceProvider is null)
+            throw new InvalidOperationException($"Bluetooth LE peripheral unavailable: {result.Error}. Check Windows Bluetooth adapter and drivers.");
+        var provider = result.ServiceProvider;
+        try
+        {
+            var writeParameters = new GattLocalCharacteristicParameters
+            {
+                CharacteristicProperties = GattCharacteristicProperties.Write,
+                WriteProtectionLevel = GattProtectionLevel.EncryptionRequired
+            };
+            var control = await provider.Service.CreateCharacteristicAsync(ControlUuid, writeParameters);
+            var data = await provider.Service.CreateCharacteristicAsync(DataUuid, writeParameters);
+            var status = await provider.Service.CreateCharacteristicAsync(StatusUuid, new GattLocalCharacteristicParameters
+            {
+                CharacteristicProperties = GattCharacteristicProperties.Read | GattCharacteristicProperties.Notify,
+                ReadProtectionLevel = GattProtectionLevel.EncryptionRequired
+            });
+            if (control.Error != BluetoothError.Success || data.Error != BluetoothError.Success ||
+                status.Error != BluetoothError.Success || control.Characteristic is null ||
+                data.Characteristic is null || status.Characteristic is null)
+                throw new InvalidOperationException("Bluetooth radio rejected Drift encrypted GATT characteristics.");
+            _control = control.Characteristic;
+            _data = data.Characteristic;
+            _status = status.Characteristic;
+            _control.WriteRequested += ControlWriteRequested;
+            _data.WriteRequested += DataWriteRequested;
+            _status.ReadRequested += StatusReadRequested;
+            _provider = provider;
+            _active = true;
+            provider.StartAdvertising(new GattServiceProviderAdvertisingParameters
+            {
+                IsConnectable = true,
+                IsDiscoverable = true
+            });
+            ui.Report("Bluetooth LE: Drift receiver advertising. Scan from the iPhone Bluetooth tab.");
+        }
+        catch
+        {
+            _active = false;
+            provider.StopAdvertising();
+            _provider = null;
+            throw;
+        }
+    }
+
+    public void Stop()
+    {
+        lock (_lock)
+        {
+            _active = false;
+            _approving = false;
+            Discard();
+            _provider?.StopAdvertising();
+            if (_control is not null) _control.WriteRequested -= ControlWriteRequested;
+            if (_data is not null) _data.WriteRequested -= DataWriteRequested;
+            if (_status is not null) _status.ReadRequested -= StatusReadRequested;
+            _provider = null;
+            _control = null;
+            _data = null;
+            _status = null;
+        }
+        ui.Report("Bluetooth LE receiver stopped");
+    }
+
+    private async void StatusReadRequested(GattLocalCharacteristic sender, GattReadRequestedEventArgs args)
+    {
+        var deferral = args.GetDeferral();
+        try
+        {
+            var request = await args.GetRequestAsync();
+            if (request is null) return;
+            string value;
+            lock (_lock) value = _lastStatus;
+            var bytes = Encoding.UTF8.GetBytes(value);
+            if (request.Offset > (uint)bytes.Length) request.RespondWithProtocolError(0x07);
+            else
+            {
+                using var writer = new DataWriter();
+                writer.WriteBytes(bytes.AsSpan((int)request.Offset).ToArray());
+                request.RespondWithValue(writer.DetachBuffer());
+            }
+        }
+        catch (Exception error) { ui.Report("BLE read error: " + error.Message); }
+        finally { deferral.Complete(); }
+    }
+
+    private async void ControlWriteRequested(GattLocalCharacteristic sender, GattWriteRequestedEventArgs args)
+    {
+        var deferral = args.GetDeferral();
+        try
+        {
+            var request = await args.GetRequestAsync();
+            if (request is null) return;
+            var reader = DataReader.FromBuffer(request.Value);
+            var bytes = new byte[(int)reader.UnconsumedBufferLength];
+            reader.ReadBytes(bytes);
+            bool accepted = request.Offset == 0 && HandleControl(Encoding.UTF8.GetString(bytes));
+            if (request.Option == GattWriteOption.WriteWithResponse)
+            {
+                if (accepted) request.Respond();
+                else request.RespondWithProtocolError(0x0E);
+            }
+        }
+        catch (Exception error) { ui.Report("BLE command failed: " + error.Message); }
+        finally { deferral.Complete(); }
+    }
+
+    private bool HandleControl(string command)
+    {
+        if (command == "CANCEL")
+        {
+            lock (_lock) { Discard(); _approving = false; }
+            Publish("CANCELLED");
+            return true;
+        }
+        if (command == "FINISH")
+        {
+            string? saved = null;
+            string? checksum = null;
+            lock (_lock)
+            {
+                if (_stream is null || _name is null || _tempPath is null || _hash is null || _received != _expected)
+                {
+                    Discard();
+                }
+                else
+                {
+                    try
+                    {
+                        _stream.Flush(flushToDisk: true);
+                        _stream.Dispose(); _stream = null;
+                        checksum = Convert.ToHexString(_hash.GetHashAndReset()).ToLowerInvariant();
+                        var directory = Path.GetDirectoryName(_tempPath)!;
+                        var destination = UniqueDestination(directory, _name);
+                        File.Move(_tempPath, destination);
+                        saved = destination;
+                        _tempPath = null;
+                    }
+                    catch (IOException error) { ui.Report("Bluetooth save failed: " + error.Message); }
+                    finally { Discard(); }
+                }
+            }
+            if (saved is null || checksum is null) { Publish("ERROR:Incomplete file or save failed"); return false; }
+            ui.Report($"Bluetooth file received: {Path.GetFileName(saved)} (SHA-256 {checksum})");
+            Publish("DONE:" + checksum);
+            return true;
+        }
+        if (!command.StartsWith("START:", StringComparison.Ordinal)) return false;
+        var separator = command.LastIndexOf(':');
+        if (separator <= 6 || !long.TryParse(command[(separator + 1)..], out var size)) return false;
+        var requested = command[6..separator];
+        if (string.IsNullOrWhiteSpace(requested) || requested != Path.GetFileName(requested) ||
+            requested.Length > 180 || requested.StartsWith('.') || requested.Any(char.IsControl) ||
+            size < 0 || size > MaxBleBytes) return false;
+        lock (_lock)
+        {
+            if (!_active || _approving || _stream is not null) return false;
+            _approving = true;
+        }
+        Publish("APPROVAL");
+        _ = ApproveBluetoothFileAsync(requested, size);
+        return true;
+    }
+
+    private async Task ApproveBluetoothFileAsync(string requested, long size)
+    {
+        bool allowed;
+        try { allowed = await ui.ApproveFileAsync(requested, size).WaitAsync(TimeSpan.FromSeconds(90)); }
+        catch (Exception error) { ui.Report("BLE approval failed: " + error.Message); allowed = false; }
+        bool ready = false;
+        lock (_lock)
+        {
+            if (!_active || !_approving) return;
+            _approving = false;
+            if (allowed)
+            {
+                try
+                {
+                    var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Drift");
+                    Directory.CreateDirectory(folder);
+                    _tempPath = Path.Combine(folder, ".drift-" + Guid.NewGuid().ToString("N") + ".part");
+                    _stream = new FileStream(_tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    _name = requested;
+                    _expected = size;
+                    _received = 0;
+                    ready = true;
+                }
+                catch (IOException error) { ui.Report("BLE could not open file: " + error.Message); Discard(); }
+            }
+        }
+        Publish(ready ? "READY" : "DECLINED");
+    }
+
+    private async void DataWriteRequested(GattLocalCharacteristic sender, GattWriteRequestedEventArgs args)
+    {
+        var deferral = args.GetDeferral();
+        try
+        {
+            var request = await args.GetRequestAsync();
+            if (request is null) return;
+            var reader = DataReader.FromBuffer(request.Value);
+            var bytes = new byte[(int)reader.UnconsumedBufferLength];
+            reader.ReadBytes(bytes);
+            bool accepted;
+            lock (_lock)
+            {
+                accepted = request.Offset == 0 && _active && _stream is not null &&
+                           bytes.Length <= _expected - _received;
+                if (accepted)
+                {
+                    try
+                    {
+                        _stream!.Write(bytes);
+                        _hash!.AppendData(bytes);
+                        _received += bytes.Length;
+                    }
+                    catch (IOException error) { ui.Report("BLE file write failed: " + error.Message); Discard(); accepted = false; }
+                }
+            }
+            if (request.Option == GattWriteOption.WriteWithResponse)
+            {
+                if (accepted) request.Respond();
+                else request.RespondWithProtocolError(0x0E);
+            }
+        }
+        catch (Exception error) { ui.Report("BLE data error: " + error.Message); }
+        finally { deferral.Complete(); }
+    }
+
+    private async void Publish(string value)
+    {
+        GattLocalCharacteristic? status;
+        lock (_lock) { _lastStatus = value; status = _status; }
+        if (status is null) return;
+        try
+        {
+            using var writer = new DataWriter();
+            writer.WriteBytes(Encoding.UTF8.GetBytes(value));
+            await status.NotifyValueAsync(writer.DetachBuffer());
+        }
+        catch (Exception error) { ui.Report("BLE notification failed: " + error.Message); }
+    }
+
+    private static string UniqueDestination(string folder, string name)
+    {
+        var path = Path.Combine(folder, name);
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var extension = Path.GetExtension(name);
+        for (int n = 1; File.Exists(path) && n <= 9999; n++)
+            path = Path.Combine(folder, $"{stem} ({n}){extension}");
+        if (File.Exists(path)) throw new IOException("Too many duplicate files");
+        return path;
+    }
+
+    private void Discard()
+    {
+        _stream?.Dispose(); _stream = null;
+        _hash?.Dispose(); _hash = null;
+        if (_tempPath is not null && File.Exists(_tempPath)) File.Delete(_tempPath);
+        _tempPath = null;
+        _name = null;
+        _expected = _received = 0;
+    }
 }
