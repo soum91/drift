@@ -30,7 +30,11 @@ def main():
         "minOSVersion": "16.0",
     }
     app["versions"] = [entry] + [v for v in app.get("versions", []) if v.get("version") != args.version][:29]
-    path.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    serialized = json.dumps(catalog, indent=2, ensure_ascii=False) + "\n"
+    path.write_text(serialized, encoding="utf-8")
+    # Some sideloaders resolve a GitHub repository to /repo.json rather than
+    # honoring /source.json. Keep both public URLs exactly synchronized.
+    Path("repo.json").write_text(serialized, encoding="utf-8")
 
 
 if __name__ == "__main__":
