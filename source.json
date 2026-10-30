@@ -16,6 +16,16 @@
       "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
       "versions": [
         {
+          "version": "0.1.0.4",
+          "buildVersion": "4",
+          "date": "2026-10-30",
+          "localizedDescription": "* Add standalone Windows Drift companion with Wi-Fi file transfer and opt-in clipboard sync\n* catalog: publish Drift Companion 0.1.0.3",
+          "changelog": "* Add standalone Windows Drift companion with Wi-Fi file transfer and opt-in clipboard sync\n* catalog: publish Drift Companion 0.1.0.3",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.4/Drift-Companion.ipa",
+          "size": 162233,
+          "minOSVersion": "16.0"
+        },
+        {
           "version": "0.1.0.3",
           "buildVersion": "3",
           "date": "2026-10-30",
