@@ -1,0 +1,97 @@
+name: Drift Android TV signed release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'build.sh'
+      - '.github/workflows/android-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drift-android-signed-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAS_SIGNING: ${{ secrets.DRIFT_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set Android build number
+        run: echo "DRIFT_BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + 2 ))" >> "$GITHUB_ENV"
+      - name: Explain missing original signing identity
+        if: env.HAS_SIGNING != 'true'
+        run: |
+          echo '::warning::No signed Android release can be published because DRIFT_KEYSTORE_BASE64 is not configured.'
+          echo '::warning::The original Drift build-2 signing key is required for an in-place update. The Test Drift workflow still compiles an unsigned APK.'
+      - uses: actions/setup-java@v4
+        if: env.HAS_SIGNING == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK for signed APK
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build using the retained Drift signing key
+        if: env.HAS_SIGNING == 'true'
+        env:
+          DRIFT_KEYSTORE_BASE64: ${{ secrets.DRIFT_KEYSTORE_BASE64 }}
+          DRIFT_KEYSTORE_PASSWORD: ${{ secrets.DRIFT_KEYSTORE_PASSWORD }}
+          DRIFT_KEY_ALIAS: ${{ secrets.DRIFT_KEY_ALIAS }}
+          DRIFT_KEY_PASSWORD: ${{ secrets.DRIFT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$DRIFT_KEYSTORE_PASSWORD"
+          printf '%s' "$DRIFT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/drift-signing.jks"
+          printf '%s' "$DRIFT_KEYSTORE_PASSWORD" > "$RUNNER_TEMP/drift-storepass.txt"
+          printf '%s' "${DRIFT_KEY_PASSWORD:-$DRIFT_KEYSTORE_PASSWORD}" > "$RUNNER_TEMP/drift-keypass.txt"
+          export DRIFT_KEYSTORE="$RUNNER_TEMP/drift-signing.jks"
+          export DRIFT_STOREPASS_FILE="$RUNNER_TEMP/drift-storepass.txt"
+          export DRIFT_KEYPASS_FILE="$RUNNER_TEMP/drift-keypass.txt"
+          export DRIFT_KEY_ALIAS="${DRIFT_KEY_ALIAS:-drift}"
+          bash build.sh
+      - name: Reject APKs signed with a different certificate
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          set -euo pipefail
+          APK="out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" > "$RUNNER_TEMP/drift-signature.txt"
+          grep -i -F '80449c61bd0ecef4560eef65a575111e1884a465fb443859bba64cbf9943d022' "$RUNNER_TEMP/drift-signature.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -F "name='dev.soum91.drift'"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -F "versionCode='$DRIFT_BUILD_NUMBER'"
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_SIGNING == 'true'
+        with:
+          name: Drift-AndroidTV-signed-${{ github.run_number }}
+          path: out/Drift-0.1.1-build-*.apk
+      - name: Publish verified Android TV release
+        if: env.HAS_SIGNING == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="0.1.1.$DRIFT_BUILD_NUMBER"
+          TAG="android-v$VERSION"
+          APK="out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk"
+          PREV="$(git tag --sort=-v:refname -l 'android-v*' | head -1)"
+          if [ -n "$PREV" ]; then
+            git log "$PREV"..HEAD --pretty='* %s' --no-merges > "$RUNNER_TEMP/drift-android-notes.txt"
+          else
+            git log -20 --pretty='* %s' --no-merges > "$RUNNER_TEMP/drift-android-notes.txt"
+          fi
+          test -s "$RUNNER_TEMP/drift-android-notes.txt" || printf 'Android TV maintenance build %s\n' "$DRIFT_BUILD_NUMBER" > "$RUNNER_TEMP/drift-android-notes.txt"
+          gh release create "$TAG" "$APK#Drift-AndroidTV.apk" --title "Drift Android TV $VERSION" --notes-file "$RUNNER_TEMP/drift-android-notes.txt"

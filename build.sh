@@ -16,6 +16,7 @@ build=int(sys.argv[1])
 assert 0 < build < 2100000000
 manifest=pathlib.Path('app/src/main/AndroidManifest.xml').read_text()
 manifest=re.sub(r'android:versionCode="\d+"',f'android:versionCode="{build}"',manifest)
+manifest=re.sub(r'android:versionName="[^"]+"',f'android:versionName="0.1.1.{build}"',manifest)
 pathlib.Path('build/AndroidManifest.xml').write_text(manifest)
 PY
 "$DRIFT_TOOLS/aapt2" compile --dir app/src/main/res -o build/resources.zip
@@ -33,6 +34,10 @@ if [ "${DRIFT_UNSIGNED:-0}" = 1 ]; then
 else
   : "${DRIFT_KEYSTORE:?Set DRIFT_KEYSTORE to the original retained signing keystore}"
   : "${DRIFT_STOREPASS_FILE:?Set DRIFT_STOREPASS_FILE to its password file}"
-  "$DRIFT_TOOLS/apksigner" sign --ks "$DRIFT_KEYSTORE" --ks-key-alias drift --ks-pass "file:$DRIFT_STOREPASS_FILE" --out "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk" build/aligned.apk
+  signing_args=(--ks "$DRIFT_KEYSTORE" --ks-key-alias "${DRIFT_KEY_ALIAS:-drift}" --ks-pass "file:$DRIFT_STOREPASS_FILE")
+  if [ -n "${DRIFT_KEYPASS_FILE:-}" ]; then
+    signing_args+=(--key-pass "file:$DRIFT_KEYPASS_FILE")
+  fi
+  "$DRIFT_TOOLS/apksigner" sign "${signing_args[@]}" --out "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk" build/aligned.apk
   "$DRIFT_TOOLS/apksigner" verify --verbose "out/Drift-0.1.1-build-$DRIFT_BUILD_NUMBER.apk"
 fi

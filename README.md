@@ -29,7 +29,7 @@ Windows builds: https://github.com/soum91/drift/releases?q=windows-v
 
 Native AirDrop remains an optional, **hardware-specific research** integration: [PulseIt](https://github.com/gsl0001/windows-airdrop) has documented actual iPhone-to-Windows AirDrop transfers using a supported TP-Link Archer T3U `2357:012d` USB adapter. Drift does not bundle PulseIt or claim that Windows Wi-Fi Direct can implement Apple's AWDL. Android TV's native AirDrop picker goal also remains unimplemented.
 
-**Signing continuity:** `dev.soum91.drift` retains its application ID and build 3 increments `versionCode` to 3. The original signing keystore is *not* in GitHub. CI compiles an explicitly `UNSIGNED` APK for review; do not attempt to install it over build 2. A real in-place upgrade must be signed using the original key and verified on hardware before its release is added to EmberTV's unified catalog. The EmberTV catalog currently links the existing signed **build 2 diagnostic**, with that limitation clearly displayed.
+**Signing continuity:** `dev.soum91.drift` retains its application ID and build 3 increments `versionCode` to 3. The original signing keystore is *not* in GitHub. The regular test workflow compiles an explicitly `UNSIGNED` APK for review; do not attempt to install it over build 2. The separate `Drift Android TV signed release` workflow publishes an installable APK only when the original signing secrets are configured and its certificate matches build 2 (SHA-256 `80449c61bd0ecef4560eef65a575111e1884a465fb443859bba64cbf9943d022`). EmberTV should not advertise an unsigned diagnostic artifact as an update.
 
 ## Purpose
 
@@ -79,6 +79,8 @@ bash build.sh
 ```
 
 Keep the original signing key; never generate another one for updates. The separate signing backup from build 1 remains authoritative. No secrets are included in source archives. This build-2 source snapshot is published at https://github.com/soum91/drift. The original signing key and password remain private and are not stored in this repository.
+
+For GitHub's signed Android release job, configure repository Actions secrets `DRIFT_KEYSTORE_BASE64` (base64 of the original JKS), `DRIFT_KEYSTORE_PASSWORD`, and, if different from the store password, `DRIFT_KEY_PASSWORD`. Set `DRIFT_KEY_ALIAS` only if the key's alias is not `drift`. The workflow checks the actual APK signing certificate against build 2 before publishing `Drift-AndroidTV.apk` under an `android-v*` release. If these secrets are absent, it publishes nothing and reports why; the existing unsigned compilation artifact remains available for source review.
 
 `test.sh` covers the discontinued file-transfer server, not radio access. Build 2 was checked by compiling the Android sources, verifying the APK signature, validating its launcher/package/version metadata, comparing its signing certificate to build 1, and statically verifying that the diagnostic class makes no interface-claim, control-transfer, bulk-transfer, or configuration calls. TV execution remains untested.
 
