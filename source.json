@@ -16,6 +16,16 @@
       "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
       "versions": [
         {
+          "version": "0.1.0.2",
+          "buildVersion": "2",
+          "date": "2026-10-30",
+          "localizedDescription": "* fix(feed): synchronize repo.json and source.json on every companion release\n* fix(feed): add repo.json compatibility alias for Drift Companion\n* catalog: publish Drift Companion 0.1.0.1",
+          "changelog": "* fix(feed): synchronize repo.json and source.json on every companion release\n* fix(feed): add repo.json compatibility alias for Drift Companion\n* catalog: publish Drift Companion 0.1.0.1",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.2/Drift-Companion.ipa",
+          "size": 121219,
+          "minOSVersion": "16.0"
+        },
+        {
           "version": "0.1.0.1",
           "buildVersion": "1",
           "date": "2026-10-30",
