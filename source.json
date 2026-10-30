@@ -14,7 +14,18 @@
       "localizedDescription": "Standalone iPhone companion for Drift on Android TV. No EmberTV required.",
       "category": "utilities",
       "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
-      "versions": []
+      "versions": [
+        {
+          "version": "0.1.0.1",
+          "buildVersion": "1",
+          "date": "2026-10-30",
+          "localizedDescription": "* feat(ios): create standalone Drift Companion app and its own release feed\n* ci: use hosted Android SDK instead of deprecated setup action\n* feat: restore Drift Wi-Fi file sharing and add BLE receiver with companion pairing\n* Add read-only ARM32 Mali kernel driver version probe\n* Add Drift build 2 source and APK\n* Add Drift build 2 README",
+          "changelog": "* feat(ios): create standalone Drift Companion app and its own release feed\n* ci: use hosted Android SDK instead of deprecated setup action\n* feat: restore Drift Wi-Fi file sharing and add BLE receiver with companion pairing\n* Add read-only ARM32 Mali kernel driver version probe\n* Add Drift build 2 source and APK\n* Add Drift build 2 README",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.1/Drift-Companion.ipa",
+          "size": 121219,
+          "minOSVersion": "16.0"
+        }
+      ]
     }
   ]
 }
