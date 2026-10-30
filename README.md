@@ -19,6 +19,14 @@ https://raw.githubusercontent.com/soum91/drift/main/source.json
 
 The `.github/workflows/companion.yml` workflow builds an **unsigned** `Drift-Companion.ipa`, publishes a GitHub Release, and adds it to that feed. Sign the IPA with your normal iOS signer. The TV receiver and iPhone companion must both be running for transfer.
 
+## Standalone Windows companion
+
+`windows/` contains a **separate native Windows x64 app** with its own GitHub Actions release. It sends to the existing TV protocol and receives files from iPhone with per-file acceptance. It can share files for iPhone download and optionally sync text clipboards in both directions while the iPhone app is foregrounded. Clipboard sharing and clipboard receiving on the Windows side are OFF by default. See [Windows setup, limitations, and changelog](windows/README.md).
+
+Windows builds: https://github.com/soum91/drift/releases?q=windows-v
+
+Native AirDrop remains an optional, **hardware-specific research** integration: [PulseIt](https://github.com/gsl0001/windows-airdrop) has documented actual iPhone-to-Windows AirDrop transfers using a supported TP-Link Archer T3U `2357:012d` USB adapter. Drift does not bundle PulseIt or claim that Windows Wi-Fi Direct can implement Apple's AWDL. Android TV's native AirDrop picker goal also remains unimplemented.
+
 **Signing continuity:** `dev.soum91.drift` retains its application ID and build 3 increments `versionCode` to 3. The original signing keystore is *not* in GitHub. CI compiles an explicitly `UNSIGNED` APK for review; do not attempt to install it over build 2. A real in-place upgrade must be signed using the original key and verified on hardware before its release is added to EmberTV's unified catalog. The EmberTV catalog currently links the existing signed **build 2 diagnostic**, with that limitation clearly displayed.
 
 ## Purpose

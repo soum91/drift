@@ -1,0 +1,55 @@
+name: Drift Windows Companion build and release
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drift-windows-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish Windows x64 portable companion
+        shell: pwsh
+        run: |
+          dotnet publish windows/Drift.Windows/Drift.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o release/windows-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path release/windows-x64/Drift.Windows.exe)) { throw 'Windows executable missing' }
+          Compress-Archive -Path release/windows-x64/* -DestinationPath Drift-Windows-x64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Drift-Windows-x64-${{ github.run_number }}
+          path: Drift-Windows-x64.zip
+      - name: Publish portable release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "0.1.0.${{ github.run_number }}"
+          $tag = "windows-v$version"
+          @"
+          Drift Windows Companion $version (unsigned portable build)
+
+          - Wi-Fi file send to Drift TV and receive from Drift iPhone.
+          - Queue files for pickup in Drift iPhone Companion.
+          - Opt-in two-way clipboard syncing with the Drift iPhone app while foregrounded.
+          - Six-digit pairing, bounded transfer sizes and manual incoming file approval.
+          - Optional link to PulseIt native AirDrop research (external app and supported adapter required).
+
+          Note: This executable is not code-signed and has not yet been tested on user hardware.
+          "@ | Set-Content -Encoding utf8 release-notes.txt
+          gh release create $tag Drift-Windows-x64.zip --title "Drift Windows $version (portable unsigned)" --notes-file release-notes.txt

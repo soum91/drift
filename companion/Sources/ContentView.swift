@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var model = DriftModel()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var method = Method.wifi
     @State private var chooseFile = false
     @FocusState private var editingAddress: Bool
@@ -23,7 +24,7 @@ struct ContentView: View {
                                 .font(.title2.weight(.bold)).foregroundStyle(Color(red: 0.44, green: 0.89, blue: 0.74))
                             Text("Drift").font(.system(size: 34, weight: .bold, design: .rounded))
                         }
-                        Text("Send files from iPhone directly to your Android TV.")
+                        Text("Files and clipboard across iPhone, Windows and Android TV.")
                             .foregroundStyle(.secondary)
                         Text("No account. No cloud upload.")
                             .font(.footnote).foregroundStyle(Color(red: 0.44, green: 0.89, blue: 0.74))
@@ -39,16 +40,16 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
 
                     if method == .wifi {
-                        TextField("TV IP address", text: $model.address)
+                        TextField("TV or Windows IPv4 address", text: $model.address)
                             .keyboardType(.numbersAndPunctuation).textInputAutocapitalization(.never)
                             .autocorrectionDisabled().focused($editingAddress)
-                        TextField("Six-digit code on TV", text: $model.code)
+                        TextField("Six-digit code on receiver", text: $model.code)
                             .keyboardType(.numberPad)
                         Button {
                             editingAddress = false
                             Task { await model.pairWiFi() }
                         } label: {
-                            Label("Pair with Drift on TV", systemImage: "tv.and.hifispeaker.fill")
+                            Label("Pair with Drift receiver", systemImage: "link")
                         }.disabled(model.busy)
                     } else {
                         Button { model.scanBluetooth() } label: {
@@ -82,15 +83,56 @@ struct ContentView: View {
                     if model.busy { ProgressView(value: model.progress) }
                 }
 
+                if method == .wifi {
+                    Section("Windows pasteboard") {
+                        Button {
+                            Task { await model.sendClipboardToWindows() }
+                        } label: {
+                            Label("Send iPhone clipboard to PC", systemImage: "doc.on.clipboard")
+                        }.disabled(model.busy || !model.isWiFiPaired)
+                        Button {
+                            Task { await model.copyWindowsClipboard() }
+                        } label: {
+                            Label("Copy Windows clipboard to iPhone", systemImage: "clipboard")
+                        }.disabled(model.busy || !model.isWiFiPaired)
+                        Toggle("Auto sync while Drift is open", isOn: $model.clipboardSyncEnabled)
+                            .disabled(!model.isWiFiPaired)
+                        Text("Enable clipboard sharing and receiving on Windows first. iOS may ask permission to paste. No background clipboard access.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+
+                    Section("Get files from Windows") {
+                        Button { Task { await model.refreshWindowsInbox() } } label: {
+                            Label("Refresh shared files", systemImage: "arrow.clockwise")
+                        }.disabled(model.busy || !model.isWiFiPaired)
+                        ForEach(model.inboxFiles) { file in
+                            Button { Task { await model.downloadFromWindows(file) } } label: {
+                                HStack {
+                                    Image(systemName: "arrow.down.doc")
+                                    Text(file.name).lineLimit(1)
+                                    Spacer()
+                                    Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }.disabled(model.busy)
+                        }
+                        ForEach(model.downloadedFiles, id: \.absoluteString) { file in
+                            ShareLink(item: file) {
+                                Label("Share saved \(file.lastPathComponent)", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
+                }
+
                 Section("Status") {
                     Text(model.status).font(.callout).textSelection(.enabled)
                 }
 
                 Section("How to connect") {
                     if method == .wifi {
-                        Label("Open Drift on your Android TV. Choose existing Wi-Fi or ad hoc Wi-Fi.", systemImage: "1.circle")
-                        Label("For ad hoc Wi-Fi, join the TV's network in iPhone Settings first.", systemImage: "2.circle")
-                        Label("Enter the TV IP address and code, then choose a file. Accept it on TV.", systemImage: "3.circle")
+                        Label("Open Drift on your Android TV or Windows PC. Start receiving.", systemImage: "1.circle")
+                        Label("Join the receiver's Wi-Fi network, or connect both devices to the same router.", systemImage: "2.circle")
+                        Label("Enter the receiver's IPv4 address and code. Windows can exchange files and clipboard text.", systemImage: "3.circle")
                     } else {
                         Label("On TV, start Drift's Bluetooth LE receiver.", systemImage: "1.circle")
                         Label("Find your TV above and connect. Approve Bluetooth pairing if requested.", systemImage: "2.circle")
@@ -99,7 +141,7 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Text("Transfer requires Drift on the TV to remain open. Bluetooth availability depends on TV hardware. Wi-Fi traffic uses local HTTP; use a trusted network.")
+                    Text("Transfer requires Drift to be running on the receiver. Bluetooth availability depends on TV hardware. Wi-Fi traffic uses local HTTP; use a trusted network. Clipboard sync is optional and active only while iPhone Drift is open.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -114,6 +156,12 @@ struct ContentView: View {
                 if method == .wifi { Task { await model.sendWiFi(file) } }
                 else { model.sendBluetooth(file) }
             case .failure(let error): model.status = error.localizedDescription
+            }
+        }
+        .task(id: model.clipboardSyncEnabled && scenePhase == .active) {
+            while model.clipboardSyncEnabled && scenePhase == .active && !Task.isCancelled {
+                await model.syncClipboardOnce()
+                try? await Task.sleep(for: .seconds(3))
             }
         }
     }

@@ -1,9 +1,16 @@
 import Foundation
 import CoreBluetooth
+import UIKit
 
 struct DriftPeer: Identifiable {
     let id: UUID
     let name: String
+}
+
+struct DriftInboxFile: Identifiable, Decodable {
+    let id: String
+    let name: String
+    let size: Int64
 }
 
 /// Optional Drift receiver integration. Wi-Fi is preferred for large files;
@@ -11,11 +18,17 @@ struct DriftPeer: Identifiable {
 @MainActor final class DriftModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published var address = UserDefaults.standard.string(forKey: "driftAddress") ?? ""
     @Published var code = ""
-    @Published var status = "Open Drift on TV, then choose the same transfer mode here."
+    @Published var status = "Open Drift on TV or Windows, then pair over Wi-Fi."
     @Published var progress = 0.0
     @Published var busy = false
     @Published var peers: [DriftPeer] = []
     @Published var connectedName = ""
+    @Published var inboxFiles: [DriftInboxFile] = []
+    @Published var downloadedFiles: [URL] = []
+    @Published var clipboardSyncEnabled = false
+    var isWiFiPaired: Bool { !token.isEmpty }
+    private var seenPhoneClipboard: String?
+    private var seenWindowsClipboard: String?
 
     private let service = CBUUID(string: "D25E69C1-7C6D-46E3-A7C9-A7CFE89A0020")
     private let controlUUID = CBUUID(string: "D25E69C1-7C6D-46E3-A7C9-A7CFE89A0021")
@@ -45,8 +58,8 @@ struct DriftPeer: Identifiable {
     }
 
     func pairWiFi() async {
-        guard let url = endpoint?.appendingPathComponent("pair") else { status = "Enter Drift's TV IPv4 address"; return }
-        guard code.count == 6, code.allSatisfy(\.isNumber) else { status = "Enter the six-digit Drift code shown on TV"; return }
+        guard let url = endpoint?.appendingPathComponent("pair") else { status = "Enter the TV or PC IPv4 address"; return }
+        guard code.count == 6, code.allSatisfy(\.isNumber) else { status = "Enter the six-digit code shown on the receiver"; return }
         busy = true; defer { busy = false }
         do {
             var req = URLRequest(url: url)
@@ -58,13 +71,16 @@ struct DriftPeer: Identifiable {
                 throw DriftError.response("Invalid pairing response")
             }
             token = result
+            inboxFiles = []
+            seenPhoneClipboard = nil
+            seenWindowsClipboard = nil
             UserDefaults.standard.set(address, forKey: "driftAddress")
-            status = "Paired for this Drift session. Select any file to send."
+            status = "Paired for this Drift session. You can send files, or sync clipboard with Windows."
         } catch { status = "Drift pairing failed: \(error.localizedDescription)" }
     }
 
     func sendWiFi(_ url: URL) async {
-        guard let base = endpoint, !token.isEmpty else { status = "Pair with Drift on TV first"; return }
+        guard let base = endpoint, !token.isEmpty else { status = "Pair with a Drift receiver first"; return }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         busy = true; progress = 0
@@ -79,7 +95,7 @@ struct DriftPeer: Identifiable {
             offer.url = components.url
             offer.httpMethod = "POST"
             offer.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            status = "Waiting for your TV to accept \(filename)…"
+            status = "Waiting for the receiver to accept \(filename)…"
             let (reply, response) = try await URLSession.shared.data(for: offer)
             try validate(response, reply)
             guard let ticket = String(data: reply, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !ticket.isEmpty else {
@@ -96,8 +112,127 @@ struct DriftPeer: Identifiable {
             let (result, uploadResponse) = try await URLSession.shared.upload(for: upload, fromFile: url)
             try validate(uploadResponse, result)
             progress = 1
-            status = String(data: result, encoding: .utf8) ?? "Received on TV"
+            status = String(data: result, encoding: .utf8) ?? "Received by Drift"
         } catch { status = "Wi-Fi transfer failed: \(error.localizedDescription)" }
+    }
+
+    private func windowsRequest(_ path: String, method: String = "GET") throws -> URLRequest {
+        guard let base = endpoint, !token.isEmpty else { throw DriftError.response("Pair with Drift on Windows first") }
+        var request = URLRequest(url: base.appendingPathComponent(path))
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    func refreshWindowsInbox() async {
+        do {
+            let request = try windowsRequest("inbox")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validate(response, data)
+            inboxFiles = try JSONDecoder().decode([DriftInboxFile].self, from: data)
+            status = "Windows has \(inboxFiles.count) shared file(s) available."
+        } catch { status = "Windows inbox: \(error.localizedDescription)" }
+    }
+
+    func downloadFromWindows(_ file: DriftInboxFile) async {
+        busy = true; defer { busy = false }
+        do {
+            var request = try windowsRequest("download")
+            var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "id", value: file.id)]
+            request.url = components.url
+            let (temporary, response) = try await URLSession.shared.download(for: request)
+            try validate(response, Data())
+            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Drift Downloads", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let safeName = URL(fileURLWithPath: file.name).lastPathComponent
+            guard !safeName.isEmpty, !safeName.hasPrefix(".") else { throw DriftError.response("Invalid shared filename") }
+            let stem = (safeName as NSString).deletingPathExtension
+            let ext = (safeName as NSString).pathExtension
+            var destination = directory.appendingPathComponent(safeName)
+            var suffix = 1
+            while FileManager.default.fileExists(atPath: destination.path) {
+                let candidate = "\(stem) (\(suffix))" + (ext.isEmpty ? "" : ".\(ext)")
+                destination = directory.appendingPathComponent(candidate)
+                suffix += 1
+            }
+            try FileManager.default.moveItem(at: temporary, to: destination)
+            downloadedFiles.insert(destination, at: 0)
+            status = "Downloaded \(safeName). Tap Share to save to Files or open in another app."
+        } catch { status = "Windows download failed: \(error.localizedDescription)" }
+    }
+
+    private func readWindowsClipboard() async throws -> String {
+        let request = try windowsRequest("clipboard")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data)
+        guard data.count <= 64 * 1024, let text = String(data: data, encoding: .utf8) else {
+            throw DriftError.response("Windows clipboard exceeds 64 KiB or is not UTF-8 text")
+        }
+        return text
+    }
+
+    private func writeWindowsClipboard(_ text: String) async throws {
+        guard text.utf8.count <= 64 * 1024 else { throw DriftError.response("Text clipboard limited to 64 KiB") }
+        var request = try windowsRequest("clipboard", method: "POST")
+        request.httpBody = Data(text.utf8)
+        request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response, data)
+    }
+
+    func sendClipboardToWindows() async {
+        do {
+            guard let text = UIPasteboard.general.string else { throw DriftError.response("Nothing copied on iPhone") }
+            try await writeWindowsClipboard(text)
+            seenPhoneClipboard = text
+            seenWindowsClipboard = text
+            status = "iPhone clipboard copied to Windows."
+        } catch { status = "Send clipboard: \(error.localizedDescription)" }
+    }
+
+    func copyWindowsClipboard() async {
+        do {
+            let text = try await readWindowsClipboard()
+            UIPasteboard.general.string = text
+            seenPhoneClipboard = text
+            seenWindowsClipboard = text
+            status = "Windows clipboard copied to iPhone."
+        } catch { status = "Get clipboard: \(error.localizedDescription)" }
+    }
+
+    /// Foreground-only opt-in polling. iOS may show a pasteboard permission prompt.
+    func syncClipboardOnce() async {
+        guard clipboardSyncEnabled, isWiFiPaired else { return }
+        do {
+            let phone = UIPasteboard.general.string ?? ""
+            let windows = try await readWindowsClipboard()
+            guard let oldPhone = seenPhoneClipboard, let oldWindows = seenWindowsClipboard else {
+                // First poll establishes baseline; never overwrite either clipboard on toggle-on.
+                seenPhoneClipboard = phone
+                seenWindowsClipboard = windows
+                return
+            }
+            if phone != oldPhone && phone != windows {
+                try await writeWindowsClipboard(phone)
+                seenPhoneClipboard = phone
+                seenWindowsClipboard = phone
+                status = "Clipboard synced: iPhone → Windows"
+            } else if windows != oldWindows && windows != phone {
+                UIPasteboard.general.string = windows
+                seenPhoneClipboard = windows
+                seenWindowsClipboard = windows
+                status = "Clipboard synced: Windows → iPhone"
+            } else {
+                seenPhoneClipboard = phone
+                seenWindowsClipboard = windows
+            }
+        } catch {
+            // A disabled Windows clipboard permission should not cause polling to silently copy data.
+            clipboardSyncEnabled = false
+            status = "Auto sync stopped: \(error.localizedDescription). Check Windows sharing permissions."
+        }
     }
 
     private func validate(_ response: URLResponse, _ body: Data) throws {
