@@ -49,9 +49,27 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
 
     private sealed record Ticket(string Id, string Name, long Size, DateTimeOffset Expiry);
     public bool Running => _app is not null;
-    public string PairingCode => _code;
+    public string PairingCode
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_app is not null && DateTimeOffset.UtcNow >= _expiry)
+                    RenewPairingCodeLocked();
+                return _code;
+            }
+        }
+    }
     public bool RememberPairedDevices { get; set; } = true;
     public string DeviceId => _trust.Id;
+
+    private void RenewPairingCodeLocked()
+    {
+        _code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6");
+        _expiry = DateTimeOffset.UtcNow.AddMinutes(15);
+        _failures = 0;
+    }
 
     public static IEnumerable<(IPAddress Address, string Name)> LocalInterfaces() =>
         NetworkInterface.GetAllNetworkInterfaces()
@@ -82,11 +100,12 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     {
         if (_app is not null) throw new InvalidOperationException("Drift is already listening");
         if (!IsPrivateIpv4(bindAddress)) throw new InvalidOperationException("Choose a private LAN address");
-        _code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6");
         _sessions.Clear();
-        _expiry = DateTimeOffset.UtcNow.AddMinutes(15);
-        _failures = 0;
-        lock (_gate) _ticket = null;
+        lock (_gate)
+        {
+            RenewPairingCodeLocked();
+            _ticket = null;
+        }
 
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(server =>
@@ -120,7 +139,7 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
             ui.Report("Bonjour discovery active: " + profile.FullyQualifiedName);
         }
         catch (Exception error) { ui.Report("Bonjour unavailable: " + error.Message + " (manual IP still works)"); }
-        ui.Report($"Listening on {bindAddress}:{Port}, code {_code} (15 minutes)");
+        ui.Report($"Listening on {bindAddress}:{Port}, code {PairingCode} (rotates every 15 minutes)");
     }
 
     public async Task StopAsync()
@@ -217,13 +236,17 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
 
     private async Task PairAsync(HttpContext context)
     {
-        if (DateTimeOffset.UtcNow > _expiry || _failures >= 10)
+        // Reading PairingCode rotates an expired code before comparing requests.
+        // Trusted reconnection uses /challenge and never depends on this code.
+        var currentCode = PairingCode;
+        if (_failures >= 10)
         {
-            context.Response.StatusCode = 403;
+            context.Response.StatusCode = 429;
+            await context.Response.WriteAsync("Too many incorrect codes. Restart receiving to unlock pairing.");
             return;
         }
         var supplied = Encoding.ASCII.GetBytes(context.Request.Headers["X-Drift-Code"].ToString());
-        var expected = Encoding.ASCII.GetBytes(_code);
+        var expected = Encoding.ASCII.GetBytes(currentCode);
         if (supplied.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(supplied, expected))
         {
             Interlocked.Increment(ref _failures);

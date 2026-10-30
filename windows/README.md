@@ -31,7 +31,7 @@ Latest Windows releases: https://github.com/soum91/drift/releases?q=windows-v
 ## Security and limitations
 
 - Local plain HTTP on port **45788** is secured by a random temporary bearer token obtained through a six-digit pairing code. **It is not network-layer encryption.** Use only a trusted private network, never forward that port onto the internet or use public Wi-Fi with sensitive files/clipboards.
-- Pairing expires after 15 minutes or 10 bad codes. Receiving files always requires explicit Windows acceptance. The Windows clipboard endpoints are OFF by default, independently controlled, and accept text up to 64 KiB. Files are limited to 8 GiB; up to 50 files are queued.
+- Initial pairing codes rotate automatically every 15 minutes and the Windows UI always shows the current code. Ten incorrect attempts lock out code-based pairing until receiving is restarted. Code rotation never revokes an already trusted phone. Receiving files always requires explicit Windows acceptance. The Windows clipboard endpoints are OFF by default, independently controlled, and accept text up to 64 KiB. Files are limited to 8 GiB; up to 50 files are queued.
 - Initial pairing sends the trust key only once over local HTTP. Its copy is kept under the Windows user account encrypted with DPAPI, and in iOS Keychain. Subsequent sessions use a one-time challenge and HMAC-SHA256 rather than re-sending that key. This is still **not TLS**, so pair on your trusted LAN only. Use **Forget trusted phones** on Windows and **Forget Windows pairing** on iPhone to revoke it.
 - For clipboard sync, foreground iOS clipboard reads depend on Apple's privacy rules. Background or system-level Universal Clipboard is **not** implemented.
 - Windows can remain running in its tray and optionally auto-launch at sign-in, but **iOS cannot hold an unlimited background connection** once the system suspends Drift. Discovery, reconnection, and clipboard polling resume while Drift is foregrounded.
@@ -50,6 +50,14 @@ dotnet publish windows/Drift.Windows/Drift.Windows.csproj -c Release -r win-x64 
 GitHub workflow: `.github/workflows/windows.yml`. The project uses WinForms, .NET ASP.NET Core shared framework, Windows Runtime Bluetooth APIs, Makaretu multicast DNS and Windows DPAPI.
 
 ## Changelog
+
+### Trusted reconnect and pasteboard reliability
+
+- Automatically rotate expired first-pairing codes on Windows and keep the displayed six-digit code current without restarting the receiver.
+- Keep the iPhone clipboard auto-sync preference enabled across app relaunches and temporary LAN disconnections; it resumes when a trusted session reconnects while Drift is foregrounded.
+- Publish connection state to SwiftUI so pasteboard controls update when a trusted session is established or lost.
+- Retry trusted iPhone reconnection against the saved IPv4 address and Bonjour-discovered hostname; do not overwrite a working IPv4 with an unverified `.local` name.
+- Preserve Keychain trust when updating it, show an explicit status if trust could not be saved, and set short connection timeouts for prompt retry.
 
 ### Windows auto-discovery and Bluetooth update
 

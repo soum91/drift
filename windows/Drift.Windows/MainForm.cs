@@ -16,6 +16,7 @@ internal sealed class MainForm : Form, IDriftUi
     private readonly DriftSender _sender = new();
     private readonly ComboBox _interface = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Label _code = new() { AutoSize = true, ForeColor = Mint, Font = new Font("Segoe UI", 20, FontStyle.Bold) };
+    private readonly System.Windows.Forms.Timer _pairingCodeTimer = new() { Interval = 1000 };
     private readonly Button _listen = new() { Text = "Start receiving", Width = 154 };
     private readonly TextBox _peerIp = new() { Width = 175, PlaceholderText = "192.168.1.20" };
     private readonly TextBox _peerCode = new() { Width = 104, MaxLength = 6, PlaceholderText = "6-digit code" };
@@ -203,6 +204,15 @@ internal sealed class MainForm : Form, IDriftUi
         root.Controls.Add(logPanel, 0, 1);
 
         _tray = new NotifyIcon { Icon = Icon, Text = "Drift Windows Companion", Visible = true };
+        _pairingCodeTimer.Tick += (_, _) =>
+        {
+            if (!_service.Running) return;
+            var current = _service.PairingCode;
+            if (_code.Text == current) return;
+            _code.Text = current;
+            Report("Expired pairing code refreshed. Trusted iPhones continue reconnecting without a code.");
+        };
+        _pairingCodeTimer.Start();
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open Drift", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
         menu.Items.Add("Exit Drift", null, (_, _) => { _reallyExit = true; Close(); });
@@ -215,6 +225,8 @@ internal sealed class MainForm : Form, IDriftUi
         };
         FormClosed += (_, _) =>
         {
+            _pairingCodeTimer.Stop();
+            _pairingCodeTimer.Dispose();
             _tray.Visible = false;
             _tray.Dispose();
             _sender.Dispose();

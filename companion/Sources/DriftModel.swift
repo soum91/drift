@@ -28,11 +28,11 @@ struct DriftInboxFile: Identifiable, Decodable {
     @Published var connectedName = ""
     @Published var inboxFiles: [DriftInboxFile] = []
     @Published var downloadedFiles: [URL] = []
-    @Published var clipboardSyncEnabled = false
+    @Published var clipboardSyncEnabled = UserDefaults.standard.bool(forKey: "driftClipboardAutoSync")
+    @Published private(set) var isWiFiPaired = false
     @Published var autoReconnect = UserDefaults.standard.object(forKey: "driftAutoReconnect") as? Bool ?? true
     @Published var foundWindows = "Searching for Drift on your network…"
     @Published var reconnecting = false
-    var isWiFiPaired: Bool { !token.isEmpty }
     private var seenPhoneClipboard: String?
     private var seenWindowsClipboard: String?
 
@@ -49,7 +49,10 @@ struct DriftInboxFile: Identifiable, Decodable {
     private var bluetoothData = Data()
     private var bluetoothOffset = 0
     private var awaitingApproval = false
-    private var token = ""
+    private var token = "" {
+        didSet { isWiFiPaired = !token.isEmpty }
+    }
+    private var discoveredTrustedHost: String?
     private var serviceBrowser: NetServiceBrowser?
     private var discoveredServices: [NetService] = []
 
@@ -67,19 +70,21 @@ struct DriftInboxFile: Identifiable, Decodable {
         Task { await reconnectWindowsIfPossible() }
     }
 
-    private var endpoint: URL? {
+    private func endpoint(for address: String) -> URL? {
         let host = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, !host.contains("/"), !host.contains(":"),
               host.range(of: #"^[A-Za-z0-9.\-]+$"#, options: .regularExpression) != nil else { return nil }
         return URL(string: "http://\(host):45788")
     }
 
+    private var endpoint: URL? { endpoint(for: address) }
+
     func pairWiFi() async {
         guard let url = endpoint?.appendingPathComponent("pair") else { status = "Enter the TV or PC IPv4 address"; return }
         guard code.count == 6, code.allSatisfy(\.isNumber) else { status = "Enter the six-digit code shown on the receiver"; return }
         busy = true; defer { busy = false }
         do {
-            var req = URLRequest(url: url)
+            var req = URLRequest(url: url, timeoutInterval: 10)
             req.httpMethod = "POST"
             req.setValue(code, forHTTPHeaderField: "X-Drift-Code")
             let (body, response) = try await URLSession.shared.data(for: req)
@@ -88,18 +93,20 @@ struct DriftInboxFile: Identifiable, Decodable {
                 throw DriftError.response("Invalid pairing response")
             }
             token = result
+            var remembered = false
             if let http = response as? HTTPURLResponse,
                let id = http.value(forHTTPHeaderField: "X-Drift-Device-ID"),
                let secret = http.value(forHTTPHeaderField: "X-Drift-Trust-Key"),
                id.count == 32, secret.count == 64 {
-                saveTrust(Trust(id: id, secret: secret, host: address))
-                status = "Trusted Windows pairing saved. Reconnection will be automatic."
+                remembered = saveTrust(Trust(id: id, secret: secret, host: address))
             }
             inboxFiles = []
             seenPhoneClipboard = nil
             seenWindowsClipboard = nil
             UserDefaults.standard.set(address, forKey: "driftAddress")
-            status = "Paired for this Drift session. You can send files, or sync clipboard with Windows."
+            status = remembered
+                ? "Connected and trusted. Drift will reconnect automatically without another code."
+                : "Connected for this session, but trusted pairing could not be saved. Check the Windows Remember setting or iOS Keychain access."
         } catch { status = "Drift pairing failed: \(error.localizedDescription)" }
     }
 
@@ -130,11 +137,9 @@ struct DriftInboxFile: Identifiable, Decodable {
               let txt = service.txtRecordData(),
               let id = NetService.dictionary(fromTXTRecord: txt)["id"].flatMap({ String(data: $0, encoding: .utf8) }),
               id == trust.id else { return }
-        if address != hostname {
-            address = hostname
-            UserDefaults.standard.set(hostname, forKey: "driftAddress")
-            saveTrust(Trust(id: trust.id, secret: trust.secret, host: hostname))
-        }
+        // Discovery is a fallback. Never replace a working saved IPv4 address
+        // with an untested .local host, which can break automatic reconnection.
+        discoveredTrustedHost = hostname
         Task { await reconnectWindowsIfPossible() }
     }
 
@@ -144,38 +149,74 @@ struct DriftInboxFile: Identifiable, Decodable {
         if enabled { Task { await reconnectWindowsIfPossible() } }
     }
 
+    func setClipboardSyncEnabled(_ enabled: Bool) {
+        clipboardSyncEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "driftClipboardAutoSync")
+        if enabled {
+            seenPhoneClipboard = nil
+            seenWindowsClipboard = nil
+            if !isWiFiPaired {
+                status = loadTrust() == nil
+                    ? "Clipboard preference saved. Pair with Windows once to establish trusted reconnection."
+                    : "Clipboard sync enabled. Waiting for the trusted Windows connection."
+                Task { await reconnectWindowsIfPossible() }
+            }
+        }
+    }
+
     func reconnectWindowsIfPossible() async {
-        guard autoReconnect, !reconnecting, let trust = loadTrust(), let base = endpoint else { return }
+        guard autoReconnect, !reconnecting, let trust = loadTrust() else { return }
         reconnecting = true
         defer { reconnecting = false }
-        do {
-            if !token.isEmpty {
-                var health = URLRequest(url: base.appendingPathComponent("health"))
-                health.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                let (_, healthResponse) = try await URLSession.shared.data(for: health)
-                if let http = healthResponse as? HTTPURLResponse, http.statusCode == 200 { return }
+        // Try the last working IP first; Bonjour and the saved trusted host are
+        // fallbacks if Windows changes addresses after a reboot or Wi-Fi switch.
+        let candidates = [address, trust.host, discoveredTrustedHost ?? ""]
+            .filter { !$0.isEmpty }
+        var attempted = Set<String>()
+        var lastError: Error?
+        for host in candidates where attempted.insert(host).inserted {
+            guard let base = endpoint(for: host) else { continue }
+            do {
+                if !token.isEmpty && host == address {
+                    var health = URLRequest(url: base.appendingPathComponent("health"), timeoutInterval: 5)
+                    health.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    let (_, response) = try await URLSession.shared.data(for: health)
+                    if let http = response as? HTTPURLResponse, http.statusCode == 200 { return }
+                }
+                // Challenge/HMAC reconnect uses saved Keychain trust, never the six-digit code.
+                let challenge = URLRequest(url: base.appendingPathComponent("challenge"), timeoutInterval: 5)
+                let (nonceData, challengeResponse) = try await URLSession.shared.data(for: challenge)
+                guard let http = challengeResponse as? HTTPURLResponse,
+                      http.statusCode == 200,
+                      http.value(forHTTPHeaderField: "X-Drift-Device-ID") == trust.id,
+                      let nonce = String(data: nonceData, encoding: .utf8), nonce.count == 48,
+                      let secret = Data(hexadecimal: trust.secret) else {
+                    throw DriftError.response("Saved Windows trust could not be verified")
+                }
+                let signature = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: secret))
+                let proof = Data(signature).map { String(format: "%02X", $0) }.joined()
+                var request = URLRequest(url: base.appendingPathComponent("reconnect"), timeoutInterval: 5)
+                request.httpMethod = "POST"
+                request.setValue(proof, forHTTPHeaderField: "X-Drift-Proof")
+                let (result, response) = try await URLSession.shared.data(for: request)
+                try validate(response, result)
+                guard let session = String(data: result, encoding: .utf8), session.count == 48 else {
+                    throw DriftError.response("Invalid trusted reconnect response")
+                }
+                token = session
+                if address != host {
+                    address = host
+                    UserDefaults.standard.set(host, forKey: "driftAddress")
+                    _ = saveTrust(Trust(id: trust.id, secret: trust.secret, host: host))
+                }
+                status = "Reconnected securely to Drift Windows (\(host))."
+                return
+            } catch {
+                lastError = error
             }
-            // A one-time challenge proves device trust; the secret is never resent after initial pairing.
-            let (nonceData, challengeResponse) = try await URLSession.shared.data(from: base.appendingPathComponent("challenge"))
-            guard let http = challengeResponse as? HTTPURLResponse, http.statusCode == 200,
-                  http.value(forHTTPHeaderField: "X-Drift-Device-ID") == trust.id,
-                  let nonce = String(data: nonceData, encoding: .utf8), nonce.count == 48,
-                  let secret = Data(hexadecimal: trust.secret) else { return }
-            let signature = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: secret))
-            let proof = Data(signature).map { String(format: "%02X", $0) }.joined()
-            var request = URLRequest(url: base.appendingPathComponent("reconnect"))
-            request.httpMethod = "POST"
-            request.setValue(proof, forHTTPHeaderField: "X-Drift-Proof")
-            let (result, response) = try await URLSession.shared.data(for: request)
-            try validate(response, result)
-            guard let session = String(data: result, encoding: .utf8), session.count == 48 else { return }
-            token = session
-            status = "Connected automatically to Drift Windows (\(address))."
-        } catch {
-            // Bonjour may discover the PC moments later, or the PC may be sleeping.
-            if !token.isEmpty { token = "" }
-            status = "Waiting for Drift Windows… \(error.localizedDescription)"
         }
+        token = ""
+        status = "Waiting for trusted Drift Windows… \(lastError?.localizedDescription ?? "No reachable saved address")"
     }
 
     private func loadTrust() -> Trust? {
@@ -189,15 +230,18 @@ struct DriftInboxFile: Identifiable, Decodable {
         return try? JSONDecoder().decode(Trust.self, from: data)
     }
 
-    private func saveTrust(_ trust: Trust) {
-        guard let value = try? JSONEncoder().encode(trust) else { return }
+    @discardableResult private func saveTrust(_ trust: Trust) -> Bool {
+        guard let value = try? JSONEncoder().encode(trust) else { return false }
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                     kSecAttrAccount as String: trustAccount]
-        SecItemDelete(query as CFDictionary)
+        let updates: [String: Any] = [kSecValueData as String: value]
+        let updated = SecItemUpdate(query as CFDictionary, updates as CFDictionary)
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else { return false }
         var item = query
         item[kSecValueData as String] = value
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(item as CFDictionary, nil)
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 
     func forgetTrustedWindows() {
@@ -358,9 +402,9 @@ struct DriftInboxFile: Identifiable, Decodable {
                 seenWindowsClipboard = windows
             }
         } catch {
-            // A disabled Windows clipboard permission should not cause polling to silently copy data.
-            clipboardSyncEnabled = false
-            status = "Auto sync stopped: \(error.localizedDescription). Check Windows sharing permissions."
+            // Keep the user's preference enabled while Windows sleeps, the LAN
+            // disconnects, or a short-lived session requires trusted renewal.
+            status = "Clipboard sync paused: \(error.localizedDescription). Will retry when Windows reconnects."
         }
     }
 

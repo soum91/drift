@@ -49,6 +49,8 @@ jobs:
           - Opt-in two-way clipboard syncing with the Drift iPhone app while foregrounded.
           - Six-digit pairing, bounded transfer sizes and manual incoming file approval.
           - Bonjour Wi-Fi auto-discovery and trusted-device reconnect after first pairing.
+          - Automatically refreshed first-pairing codes; trusted phones reconnect without a code after Windows restarts.
+          - iPhone foreground clipboard sync preference persists and resumes after temporary disconnection.
           - Automatically start receiving, optional launch at Windows login, and trusted-device revoke.
           - Windows Bluetooth LE receiver with encrypted GATT, per-file approval and 8 MiB limit (radio dependent).
           - Optional link to PulseIt native AirDrop research (external app and supported adapter required).

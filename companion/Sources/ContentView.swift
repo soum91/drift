@@ -108,9 +108,10 @@ struct ContentView: View {
                         } label: {
                             Label("Copy Windows clipboard to iPhone", systemImage: "clipboard")
                         }.disabled(model.busy || !model.isWiFiPaired)
-                        Toggle("Auto sync while Drift is open", isOn: $model.clipboardSyncEnabled)
-                            .disabled(!model.isWiFiPaired)
-                        Text("Enable clipboard sharing and receiving on Windows first. iOS may ask permission to paste. No background clipboard access.")
+                        Toggle("Auto sync while Drift is open", isOn: Binding(
+                            get: { model.clipboardSyncEnabled },
+                            set: { model.setClipboardSyncEnabled($0) }))
+                        Text("Sync stays enabled across temporary disconnections and app restarts. Windows must allow sharing and receiving. iOS may ask permission to paste; background clipboard access is restricted.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
 
