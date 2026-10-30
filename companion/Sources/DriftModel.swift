@@ -139,7 +139,7 @@ struct DriftInboxFile: Identifiable, Decodable {
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-        let code = errorDict[NSNetServicesErrorCode]?.intValue ?? 0
+        let code = errorDict[NSNetService.errorCode]?.intValue ?? 0
         foundWindows = "Drift discovery failed (error \(code))."
         localNetworkDiagnostics = "Local Network discovery was blocked or failed (\(code)). Check Settings → Privacy & Security → Local Network; then tap Check access again."
     }
