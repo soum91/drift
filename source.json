@@ -16,6 +16,16 @@
       "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
       "versions": [
         {
+          "version": "0.1.0.5",
+          "buildVersion": "5",
+          "date": "2026-10-30",
+          "localizedDescription": "* fix: auto discover and reconnect trusted iPhones; add Windows BLE GATT receiver\n* catalog: publish Drift Companion 0.1.0.4",
+          "changelog": "* fix: auto discover and reconnect trusted iPhones; add Windows BLE GATT receiver\n* catalog: publish Drift Companion 0.1.0.4",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.5/Drift-Companion.ipa",
+          "size": 193511,
+          "minOSVersion": "16.0"
+        },
+        {
           "version": "0.1.0.4",
           "buildVersion": "4",
           "date": "2026-10-30",
