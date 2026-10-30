@@ -1,0 +1,50 @@
+name: DriftCompanion
+options:
+  bundleIdPrefix: dev.soum91.drift
+  deploymentTarget:
+    iOS: '16.0'
+  createIntermediateGroups: true
+targets:
+  DriftCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Drift
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        LSRequiresIPhoneOS: true
+        UIRequiredDeviceCapabilities: [arm64]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: Drift pairs with your Android TV to transfer files over local Wi-Fi.
+        NSBluetoothAlwaysUsageDescription: Drift discovers your Android TV and transfers small files using Bluetooth Low Energy.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.soum91.drift.companion
+        PRODUCT_NAME: Drift Companion
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: '1'
+        SWIFT_VERSION: '5.9'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        CODE_SIGN_STYLE: Manual
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+schemes:
+  DriftCompanion:
+    build:
+      targets:
+        DriftCompanion: all
+    run:
+      config: Debug
+    archive:
+      config: Release

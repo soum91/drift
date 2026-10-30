@@ -1,0 +1,20 @@
+{
+  "name": "Drift Companion",
+  "identifier": "dev.soum91.drift.companion.source",
+  "subtitle": "Direct file transfer from iPhone to Android TV",
+  "description": "Unsigned standalone iOS Drift Companion releases for signing with EmberSign or FlareStore.",
+  "sourceURL": "https://raw.githubusercontent.com/soum91/drift/main/source.json",
+  "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
+  "apps": [
+    {
+      "name": "Drift Companion",
+      "bundleIdentifier": "dev.soum91.drift.companion",
+      "developerName": "soum91",
+      "subtitle": "Wi-Fi Direct, local Wi-Fi, and Bluetooth LE transfer",
+      "localizedDescription": "Standalone iPhone companion for Drift on Android TV. No EmberTV required.",
+      "category": "utilities",
+      "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
+      "versions": []
+    }
+  ]
+}

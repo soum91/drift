@@ -4,12 +4,20 @@ The long-term research goal is the Sony A80L appearing in the iPhone's **native 
 
 ## Build 3 source (not yet signed and released)
 
-- **Ad hoc Wi-Fi**: TV creates an Android Wi-Fi Direct group; iPhone joins the displayed network in Settings. The EmberTV iPhone companion's new **Drift** tab sends any file using the six-digit code shown on the TV. No router needed. TV prompts for each file.
+- **Ad hoc Wi-Fi**: TV creates an Android Wi-Fi Direct group; iPhone joins the displayed network in Settings. The standalone **Drift Companion** sends any file using the six-digit code shown on the TV. No router needed. TV prompts for each file.
 - **Local Wi-Fi or Ethernet**: TV listens on the selected local interface at TCP port `45788`; same companion pairing and file transfer, without creating a direct group. HTTP is permitted only on a private trusted network; this is not an internet-facing service. Transfer code expires after 15 minutes and locks after ten bad attempts.
 - **Bluetooth LE**: separate small-file protocol using encrypted GATT writes and explicit TV approval. The TV must support BLE peripheral advertising; many Android TV devices do not. Max file size is 8 MiB. This is not classic Bluetooth OBEX or AirDrop.
 - Optional Safari fallback remains available, but is no longer the primary flow.
 - Received files stay inside Drift's private storage until opened or deleted. APKs use Android's installer permission prompt; none are silently installed.
 - The radio diagnostic remains reachable from **Radio research** in the TV app. It does not detach or initialize the Wi-Fi radio.
+
+## Standalone iPhone companion
+
+`companion/` is a separate native SwiftUI iPhone app, not a feature inside EmberTV Companion. It has its own icon and bundle ID `dev.soum91.drift.companion`, independent Bluetooth and Wi-Fi transfer screens, a Files picker, and local connection instructions. Its public AltStore/FlareStore-style feed is at:
+
+https://raw.githubusercontent.com/soum91/drift/main/source.json
+
+The `.github/workflows/companion.yml` workflow builds an **unsigned** `Drift-Companion.ipa`, publishes a GitHub Release, and adds it to that feed. Sign the IPA with your normal iOS signer. The TV receiver and iPhone companion must both be running for transfer.
 
 **Signing continuity:** `dev.soum91.drift` retains its application ID and build 3 increments `versionCode` to 3. The original signing keystore is *not* in GitHub. CI compiles an explicitly `UNSIGNED` APK for review; do not attempt to install it over build 2. A real in-place upgrade must be signed using the original key and verified on hardware before its release is added to EmberTV's unified catalog. The EmberTV catalog currently links the existing signed **build 2 diagnostic**, with that limitation clearly displayed.
 

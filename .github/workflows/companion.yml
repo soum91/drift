@@ -1,0 +1,71 @@
+name: Drift iPhone companion build and release
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'companion/**'
+      - 'scripts/update_companion_repo.py'
+      - '.github/workflows/companion.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drift-companion-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate standalone Xcode project
+        working-directory: companion
+        run: xcodegen generate
+      - name: Compile unsigned Drift Companion
+        run: |
+          xcodebuild -project companion/DriftCompanion.xcodeproj -scheme DriftCompanion -configuration Release -sdk iphoneos -derivedDataPath "$RUNNER_TEMP/DriftDerived" MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION='${{ github.run_number }}' CODE_SIGNING_ALLOWED=NO build
+          APP="$RUNNER_TEMP/DriftDerived/Build/Products/Release-iphoneos/Drift Companion.app"
+          PLIST="$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$PLIST" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$PLIST" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$PLIST" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$PLIST" >/dev/null
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = 'dev.soum91.drift.companion'
+          test -s "$APP/Assets.car"
+          mkdir -p "$RUNNER_TEMP/drift-package/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/drift-package/Payload/Drift Companion.app"
+          (cd "$RUNNER_TEMP/drift-package" && zip -qr "$GITHUB_WORKSPACE/Drift-Companion.ipa" Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Drift-iPhone-unsigned-${{ github.run_number }}
+          path: Drift-Companion.ipa
+      - name: Publish unsigned IPA and update companion feed
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BUILD='${{ github.run_number }}'
+          VERSION="0.1.0.$BUILD"
+          TAG="companion-v$VERSION"
+          PREV="$(git tag --sort=-v:refname -l 'companion-v*' | head -1)"
+          if [ -n "$PREV" ]; then git log "$PREV"..HEAD --pretty='* %s' --no-merges > "$RUNNER_TEMP/notes.txt"; else git log -20 --pretty='* %s' --no-merges > "$RUNNER_TEMP/notes.txt"; fi
+          test -s "$RUNNER_TEMP/notes.txt" || printf 'Maintenance build %s\n' "$BUILD" > "$RUNNER_TEMP/notes.txt"
+          gh release create "$TAG" 'Drift-Companion.ipa#Drift-Companion.ipa' --title "Drift Companion $VERSION (unsigned)" --notes-file "$RUNNER_TEMP/notes.txt"
+          python3 scripts/update_companion_repo.py --version "$VERSION" --build "$BUILD" --url "https://github.com/${{ github.repository }}/releases/download/$TAG/Drift-Companion.ipa" --artifact 'Drift-Companion.ipa' --notes "$RUNNER_TEMP/notes.txt"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source.json
+          git commit -m "catalog: publish Drift Companion $VERSION"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git -c rebase.autoStash=true rebase origin/main
+            if git push origin HEAD:main; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+          done

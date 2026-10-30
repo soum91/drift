@@ -99,7 +99,7 @@ public final class MainActivity extends Activity {
         networkName = label("Your direct link will appear here", 16, 0xffb2bfd3); networkName.setGravity(Gravity.CENTER); right.addView(networkName);
         LinearLayout cards = new LinearLayout(this); cards.setGravity(Gravity.CENTER); right.addView(cards);
         wifiQr = qrCard(cards, "Ad hoc network"); sendQr = qrCard(cards, "Optional web sender");
-        TextView hint = label("Use the EmberTV iPhone companion's Drift tab.\nEnter this TV's address and pairing code.\nQR/Safari is only a fallback.", 14, 0xff8d9bb2); hint.setGravity(Gravity.CENTER); right.addView(hint);
+        TextView hint = label("Use the standalone Drift Companion on iPhone.\nEnter this TV's address and pairing code.\nQR/Safari is only a fallback.", 14, 0xff8d9bb2); hint.setGravity(Gravity.CENTER); right.addView(hint);
         setContentView(root); start.requestFocus();
     }
     private TextView label(String text, int size, int color) {
@@ -167,7 +167,7 @@ public final class MainActivity extends Activity {
             });
             bluetooth.start();
             start.setEnabled(false); lan.setEnabled(false); bt.setEnabled(false); stop.setEnabled(true);
-            message("Bluetooth receiver active", "Choose Bluetooth in the EmberTV companion's Drift tab.\nFor small files only; larger files should use Wi-Fi.");
+            message("Bluetooth receiver active", "Choose Bluetooth in Drift Companion on iPhone.\nFor small files only; larger files should use Wi-Fi.");
             networkName.setText("DRIFT Bluetooth LE\nTV approval is required for each file");
             progress.setText("Encrypted BLE characteristic writes.\n8 MiB maximum per file.");
         } catch (Exception e) {
@@ -288,7 +288,7 @@ public final class MainActivity extends Activity {
                 "\nTV IP: " + address.getHostAddress() + "\nPort: " + port + "\nCompanion code: " + server.pairingCode());
             starting = false;
             message("Ready for your iPhone.", (group == null ? "Keep iPhone and TV on the same private network." :
-                "Join the TV's ad hoc Wi-Fi in iPhone Settings.") + "\nThen use the EmberTV companion's Drift tab.\nAccept each incoming file on TV.");
+                "Join the TV's ad hoc Wi-Fi in iPhone Settings.") + "\nThen use Drift Companion on iPhone.\nAccept each incoming file on TV.");
             progress.setText("Pairing valid for 15 minutes.\nLocal HTTP: use only on trusted networks.");
             record("Receiver ready; interface=" + (group == null ? "LAN" : group.getInterface()) + "; IP=" + address.getHostAddress());
             main.postDelayed(() -> {
