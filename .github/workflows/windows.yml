@@ -52,6 +52,7 @@ jobs:
           - Automatically refreshed first-pairing codes; trusted phones reconnect without a code after Windows restarts.
           - iPhone foreground clipboard sync preference persists and resumes after temporary disconnection.
           - Automatically start receiving, optional launch at Windows login, and trusted-device revoke.
+          - Every 15 seconds, verify that TCP 45788 is actually listening; restart automatically after Wi-Fi changes or sleep when Auto Receive is enabled.
           - Windows Bluetooth LE receiver with encrypted GATT, per-file approval and 8 MiB limit (radio dependent).
           - Optional link to PulseIt native AirDrop research (external app and supported adapter required).
 

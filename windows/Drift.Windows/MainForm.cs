@@ -17,6 +17,7 @@ internal sealed class MainForm : Form, IDriftUi
     private readonly ComboBox _interface = new() { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly Label _code = new() { AutoSize = true, ForeColor = Mint, Font = new Font("Segoe UI", 20, FontStyle.Bold) };
     private readonly System.Windows.Forms.Timer _pairingCodeTimer = new() { Interval = 1000 };
+    private readonly System.Windows.Forms.Timer _receiverHealthTimer = new() { Interval = 15000 };
     private readonly Button _listen = new() { Text = "Start receiving", Width = 154 };
     private readonly TextBox _peerIp = new() { Width = 175, PlaceholderText = "192.168.1.20" };
     private readonly TextBox _peerCode = new() { Width = 104, MaxLength = 6, PlaceholderText = "6-digit code" };
@@ -38,6 +39,7 @@ internal sealed class MainForm : Form, IDriftUi
     private bool _allowClipboardRead;
     private bool _allowClipboardWrite;
     private bool _reallyExit;
+    private bool _receiverRecoveryRunning;
     private string? _preferredIp;
 
     private sealed record InterfaceOption(IPAddress Address, string Name)
@@ -213,6 +215,7 @@ internal sealed class MainForm : Form, IDriftUi
             Report("Expired pairing code refreshed. Trusted iPhones continue reconnecting without a code.");
         };
         _pairingCodeTimer.Start();
+        _receiverHealthTimer.Tick += async (_, _) => await EnsureReceiverHealthyAsync();
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open Drift", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
         menu.Items.Add("Exit Drift", null, (_, _) => { _reallyExit = true; Close(); });
@@ -225,6 +228,8 @@ internal sealed class MainForm : Form, IDriftUi
         };
         FormClosed += (_, _) =>
         {
+            _receiverHealthTimer.Stop();
+            _receiverHealthTimer.Dispose();
             _pairingCodeTimer.Stop();
             _pairingCodeTimer.Dispose();
             _tray.Visible = false;
@@ -237,6 +242,7 @@ internal sealed class MainForm : Form, IDriftUi
         Shown += async (_, _) =>
         {
             if (_autoReceive.Checked) await ToggleReceiving();
+            _receiverHealthTimer.Start();
             if (_bluetoothEnabled.Checked) await ToggleBluetoothAsync();
         };
         Report("iPhone → Windows: use the phone's Pair button, not Windows Pair. Auto-receiving and Bonjour discovery are supported.");
@@ -300,6 +306,8 @@ internal sealed class MainForm : Form, IDriftUi
             if (_service.Running)
             {
                 await _service.StopAsync();
+                // Explicit Stop receiving means stop, including the watchdog.
+                _autoReceive.Checked = false;
                 _listen.Text = "Start receiving";
                 _code.Text = "";
             }
@@ -316,6 +324,39 @@ internal sealed class MainForm : Form, IDriftUi
         }
         catch (Exception ex) { Error(ex); }
         finally { _listen.Enabled = true; }
+    }
+
+    private async Task EnsureReceiverHealthyAsync()
+    {
+        if (!_autoReceive.Checked || _receiverRecoveryRunning || !_listen.Enabled) return;
+        _receiverRecoveryRunning = true;
+        try
+        {
+            if (_service.ListeningOnNetwork) return;
+            Report(_service.Running
+                ? "Receiver socket or network interface disappeared. Restarting the listener…"
+                : "Automatic receiver was stopped. Starting it again…");
+            if (_service.Running) await _service.StopAsync();
+            RefreshAddresses();
+            if (_interface.SelectedItem is not InterfaceOption selected)
+            {
+                Report("Waiting for a private Wi-Fi or Ethernet address before restarting the receiver.");
+                return;
+            }
+            await _service.StartAsync(selected.Address);
+            _preferredIp = selected.Address.ToString();
+            SavePreferences();
+            _listen.Text = "Stop receiving";
+            _code.Text = _service.PairingCode;
+            Report("Receiver recovered automatically on " + selected.Address + ":" + DriftService.Port);
+        }
+        catch (Exception ex)
+        {
+            _listen.Text = "Start receiving";
+            _code.Text = "";
+            Report("Receiver recovery failed: " + ex.Message + ". Retrying in 15 seconds.");
+        }
+        finally { _receiverRecoveryRunning = false; }
     }
 
     private async Task ToggleBluetoothAsync()

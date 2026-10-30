@@ -23,7 +23,9 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSLocalNetworkUsageDescription: Drift pairs with your Android TV to transfer files over local Wi-Fi.
+        NSLocalNetworkUsageDescription: Drift finds nearby Windows PCs and Android TVs to transfer files and optional clipboard text over local Wi-Fi.
+        NSBonjourServices:
+          - _drift._tcp
         NSBluetoothAlwaysUsageDescription: Drift discovers your Android TV and transfers small files using Bluetooth Low Energy.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

@@ -37,6 +37,7 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     private TrustData _trust = LoadOrCreateTrust();
     private ServiceDiscovery? _discovery;
     private WebApplication? _app;
+    private IPAddress? _boundAddress;
     private string _code = "";
     private DateTimeOffset _expiry;
     private int _failures;
@@ -49,6 +50,16 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
 
     private sealed record Ticket(string Id, string Name, long Size, DateTimeOffset Expiry);
     public bool Running => _app is not null;
+    public bool ListeningOnNetwork
+    {
+        get
+        {
+            if (_app is null || _boundAddress is null) return false;
+            return LocalAddresses().Contains(_boundAddress) &&
+                IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                    .Any(endpoint => endpoint.Port == Port && endpoint.Address.Equals(_boundAddress));
+        }
+    }
     public string PairingCode
     {
         get
@@ -128,6 +139,7 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
         app.MapGet("/download", DownloadAsync);
         await app.StartAsync();
         _app = app;
+        _boundAddress = bindAddress;
         try
         {
             var discovery = new ServiceDiscovery();
@@ -146,6 +158,7 @@ internal sealed class DriftService(IDriftUi ui) : IAsyncDisposable
     {
         var app = _app;
         _app = null;
+        _boundAddress = null;
         _sessions.Clear();
         _discovery?.Dispose();
         _discovery = null;

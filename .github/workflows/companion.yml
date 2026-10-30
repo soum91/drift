@@ -34,6 +34,7 @@ jobs:
           PLIST="$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$PLIST" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$PLIST" >/dev/null
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSBonjourServices:0' "$PLIST")" = '_drift._tcp'
           /usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$PLIST" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$PLIST" >/dev/null
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = 'dev.soum91.drift.companion'
@@ -41,6 +42,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/drift-package/Payload"
           cp -R "$APP" "$RUNNER_TEMP/drift-package/Payload/Drift Companion.app"
           (cd "$RUNNER_TEMP/drift-package" && zip -qr "$GITHUB_WORKSPACE/Drift-Companion.ipa" Payload)
+          unzip -p "$GITHUB_WORKSPACE/Drift-Companion.ipa" 'Payload/Drift Companion.app/Info.plist' > "$RUNNER_TEMP/DriftPackagedInfo.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSBonjourServices:0' "$RUNNER_TEMP/DriftPackagedInfo.plist")" = '_drift._tcp'
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$RUNNER_TEMP/DriftPackagedInfo.plist" >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: Drift-iPhone-unsigned-${{ github.run_number }}

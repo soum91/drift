@@ -61,6 +61,10 @@ struct ContentView: View {
                         } label: {
                             Label("Find and reconnect to Windows", systemImage: "arrow.triangle.2.circlepath")
                         }
+                        Button { model.beginDiscovery() } label: {
+                            Label("Check Local Network access", systemImage: "wifi.circle")
+                        }
+                        Text(model.localNetworkDiagnostics).font(.footnote).foregroundStyle(.secondary)
                         Button(role: .destructive) { model.forgetTrustedWindows() } label: {
                             Label("Forget Windows pairing", systemImage: "person.crop.circle.badge.xmark")
                         }
@@ -183,6 +187,9 @@ struct ContentView: View {
                 await model.reconnectWindowsIfPossible()
                 try? await Task.sleep(for: .seconds(15))
             }
+        }
+        .task(id: scenePhase) {
+            if scenePhase == .active { model.beginDiscovery() }
         }
     }
 }

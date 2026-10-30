@@ -32,6 +32,7 @@ struct DriftInboxFile: Identifiable, Decodable {
     @Published private(set) var isWiFiPaired = false
     @Published var autoReconnect = UserDefaults.standard.object(forKey: "driftAutoReconnect") as? Bool ?? true
     @Published var foundWindows = "Searching for Drift on your network…"
+    @Published var localNetworkDiagnostics = "Local Network access has not been checked yet."
     @Published var reconnecting = false
     private var seenPhoneClipboard: String?
     private var seenWindowsClipboard: String?
@@ -55,6 +56,7 @@ struct DriftInboxFile: Identifiable, Decodable {
     private var discoveredTrustedHost: String?
     private var serviceBrowser: NetServiceBrowser?
     private var discoveredServices: [NetService] = []
+    private var discoveryAttempt = UUID()
 
     private struct Trust: Codable {
         let id: String
@@ -66,7 +68,9 @@ struct DriftInboxFile: Identifiable, Decodable {
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: .main)
-        beginDiscovery()
+        // A Bonjour browse during app initialization can occur before iOS has
+        // activated the scene, when the Local Network prompt is suppressed.
+        // ContentView starts discovery after the scene becomes active.
         Task { await reconnectWindowsIfPossible() }
     }
 
@@ -112,14 +116,37 @@ struct DriftInboxFile: Identifiable, Decodable {
 
     func beginDiscovery() {
         serviceBrowser?.stop()
+        discoveredServices.removeAll()
+        let attempt = UUID()
+        discoveryAttempt = attempt
+        foundWindows = "Searching for Drift on your network…"
+        localNetworkDiagnostics = "Checking Local Network access with Bonjour. If asked, tap Allow."
         let browser = NetServiceBrowser()
         browser.delegate = self
         serviceBrowser = browser
         browser.searchForServices(ofType: "_drift._tcp.", inDomain: "local.")
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, self.discoveryAttempt == attempt,
+                  self.discoveredServices.isEmpty,
+                  self.serviceBrowser === browser else { return }
+            self.localNetworkDiagnostics = "No receiver discovered yet. If no permission prompt appeared, check Settings → Privacy & Security → Local Network."
+        }
+    }
+
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        localNetworkDiagnostics = "Bonjour discovery started. Waiting for nearby Drift receivers."
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        let code = errorDict[NSNetServicesErrorCode]?.intValue ?? 0
+        foundWindows = "Drift discovery failed (error \(code))."
+        localNetworkDiagnostics = "Local Network discovery was blocked or failed (\(code)). Check Settings → Privacy & Security → Local Network; then tap Check access again."
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         discoveredServices.append(service) // Keep a strong reference until resolved.
+        localNetworkDiagnostics = "Local discovery working. Found \(service.name)."
         service.delegate = self
         service.resolve(withTimeout: 8)
         foundWindows = "Found \(service.name). Resolving…"
