@@ -16,6 +16,16 @@
       "iconURL": "https://raw.githubusercontent.com/soum91/drift/main/companion/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png",
       "versions": [
         {
+          "version": "0.1.0.9",
+          "buildVersion": "9",
+          "date": "2026-10-30",
+          "localizedDescription": "* fix: use Swift NetService errorCode constant\n* fix: use current Swift NetService error key\n* fix: foreground Local Network prompt and restore Windows receiver listener\n* catalog: publish Drift Companion 0.1.0.6",
+          "changelog": "* fix: use Swift NetService errorCode constant\n* fix: use current Swift NetService error key\n* fix: foreground Local Network prompt and restore Windows receiver listener\n* catalog: publish Drift Companion 0.1.0.6",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.9/Drift-Companion.ipa",
+          "size": 206264,
+          "minOSVersion": "16.0"
+        },
+        {
           "version": "0.1.0.6",
           "buildVersion": "6",
           "date": "2026-10-30",
