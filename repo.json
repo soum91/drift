@@ -17,6 +17,16 @@
       "versions": [
         {
           "version": "0.1.0",
+          "buildVersion": "10",
+          "date": "2026-11-03",
+          "localizedDescription": "* fix(ios-feed): separate Drift app version 0.1.0 from build counter\n* ci(android): publish only APKs signed with original Drift certificate\n* catalog: publish Drift Companion 0.1.0.9",
+          "changelog": "* fix(ios-feed): separate Drift app version 0.1.0 from build counter\n* ci(android): publish only APKs signed with original Drift certificate\n* catalog: publish Drift Companion 0.1.0.9",
+          "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.10/Drift-Companion.ipa",
+          "size": 206265,
+          "minOSVersion": "16.0"
+        },
+        {
+          "version": "0.1.0",
           "buildVersion": "9",
           "date": "2026-10-30",
           "localizedDescription": "* fix: use Swift NetService errorCode constant\n* fix: use current Swift NetService error key\n* fix: foreground Local Network prompt and restore Windows receiver listener\n* catalog: publish Drift Companion 0.1.0.6",
@@ -87,10 +97,10 @@
         }
       ],
       "version": "0.1.0",
-      "buildVersion": "9",
-      "versionDate": "2026-10-30",
-      "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.9/Drift-Companion.ipa",
-      "size": 206264,
+      "buildVersion": "10",
+      "versionDate": "2026-11-03",
+      "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.10/Drift-Companion.ipa",
+      "size": 206265,
       "minOSVersion": "16.0"
     }
   ]
