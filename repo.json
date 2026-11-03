@@ -18,7 +18,7 @@
         {
           "version": "0.1.0",
           "buildVersion": "10",
-          "date": "2026-11-03",
+          "date": "2026-11-03T18:31:56Z",
           "localizedDescription": "* fix(ios-feed): separate Drift app version 0.1.0 from build counter\n* ci(android): publish only APKs signed with original Drift certificate\n* catalog: publish Drift Companion 0.1.0.9",
           "changelog": "* fix(ios-feed): separate Drift app version 0.1.0 from build counter\n* ci(android): publish only APKs signed with original Drift certificate\n* catalog: publish Drift Companion 0.1.0.9",
           "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.10/Drift-Companion.ipa",
@@ -98,7 +98,7 @@
       ],
       "version": "0.1.0",
       "buildVersion": "10",
-      "versionDate": "2026-11-03",
+      "versionDate": "2026-11-03T18:31:56Z",
       "downloadURL": "https://github.com/soum91/drift/releases/download/companion-v0.1.0.10/Drift-Companion.ipa",
       "size": 206265,
       "minOSVersion": "16.0"

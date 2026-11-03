@@ -2,7 +2,7 @@
 """Publish a Drift iOS companion entry after the matching GitHub release exists."""
 import argparse
 import json
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -23,7 +23,7 @@ def main():
     entry = {
         "version": marketing_version,
         "buildVersion": str(args.build),
-        "date": date.today().isoformat(),
+        "date": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "localizedDescription": notes,
         "changelog": notes,
         "downloadURL": args.url,
