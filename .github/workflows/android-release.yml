@@ -25,6 +25,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Verify installed version UI contract
+        shell: bash
+        run: |
+          if command -v python3 >/dev/null 2>&1; then
+            python3 "$GITHUB_WORKSPACE/scripts/check_version_ui.py"
+          else
+            python "$GITHUB_WORKSPACE/scripts/check_version_ui.py"
+          fi
+
       - name: Set Android build number
         run: echo "DRIFT_BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + 2 ))" >> "$GITHUB_ENV"
       - name: Explain missing original signing identity

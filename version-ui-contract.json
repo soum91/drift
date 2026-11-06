@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "name": "iPhone companion",
+      "evidence": [
+        {
+          "path": "companion/Sources/ContentView.swift",
+          "contains": [
+            "Installed version",
+            "CFBundleShortVersionString",
+            "CFBundleVersion"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Android TV app",
+      "evidence": [
+        {
+          "path": "app/src/main/java/dev/soum91/drift/MainActivity.java",
+          "contains": [
+            "Installed version",
+            "getPackageInfo",
+            "versionName"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Windows companion",
+      "evidence": [
+        {
+          "path": "windows/Drift.Windows/MainForm.cs",
+          "contains": [
+            "Installed version",
+            "Application.ProductVersion"
+          ]
+        }
+      ]
+    }
+  ]
+}
