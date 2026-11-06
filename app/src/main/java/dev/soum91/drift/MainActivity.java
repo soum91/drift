@@ -91,9 +91,14 @@ public final class MainActivity extends Activity {
         tools.addView(button("Received files", () -> showFiles()));
         tools.addView(button("Diagnostics", () -> diagnostics()));
         tools.addView(button("Radio research", () -> startActivity(new Intent(this, RadioProbeActivity.class)))); left.addView(tools);
-        long build = 1;
-        try { build = getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode(); } catch (PackageManager.NameNotFoundException ignored) {}
-        progress = label("Drift / build " + build + "\nKeep Drift open while receiving.", 14, 0xff8d9bb2); left.addView(progress);
+        String version = "Unknown";
+        long build = 0;
+        try {
+            android.content.pm.PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(), 0);
+            version = installed.versionName == null ? "Unknown" : installed.versionName;
+            build = installed.getLongVersionCode();
+        } catch (PackageManager.NameNotFoundException ignored) {}
+        progress = label("Installed version " + version + " (build " + build + ")\nKeep Drift open while receiving.", 14, 0xff8d9bb2); left.addView(progress);
         LinearLayout right = new LinearLayout(this); right.setOrientation(LinearLayout.VERTICAL); right.setGravity(Gravity.CENTER);
         root.addView(right, new LinearLayout.LayoutParams(0, -1, 1));
         networkName = label("Your direct link will appear here", 16, 0xffb2bfd3); networkName.setGravity(Gravity.CENTER); right.addView(networkName);
