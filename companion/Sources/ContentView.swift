@@ -162,6 +162,9 @@ struct ContentView: View {
                     Text("Transfer requires Drift to be running on the receiver. Bluetooth availability depends on TV hardware. Wi-Fi traffic uses local HTTP; use a trusted network. Clipboard sync is optional and active only while iPhone Drift is open.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("About") {
+                    LabeledContent("Installed version", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown") (build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"))")
+                }
             }
             .navigationTitle("Drift Companion")
             .navigationBarTitleDisplayMode(.inline)
