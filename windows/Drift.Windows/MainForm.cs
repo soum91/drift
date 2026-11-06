@@ -88,6 +88,7 @@ internal sealed class MainForm : Form, IDriftUi
         heading.Controls.Add(new Label { Text = "Windows ↔ iPhone ↔ Android TV  •  local transfer, no cloud",
                                           ForeColor = Ink, Location = new Point(12, 53), AutoSize = true });
         content.Controls.Add(heading);
+        content.Controls.Add(new Label { Text = $"Installed version {Application.ProductVersion}", AutoSize = true, ForeColor = Ink });
 
         var receive = Group("iPhone → Windows (pair on the iPhone)", 193);
         var receiveRow = NewRow(20, 38);
